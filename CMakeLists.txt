@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(gpu_monitor LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # CUDA Toolkit path for NVML
@@ -53,6 +53,6 @@ if(MSVC)
         LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS"
         LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
     )
-    # Enable warnings
-    target_compile_options(${PROJECT_NAME} PRIVATE /W3)
+    # Enable warnings and correct __cplusplus macro
+    target_compile_options(${PROJECT_NAME} PRIVATE /W3 /Zc:__cplusplus)
 endif()

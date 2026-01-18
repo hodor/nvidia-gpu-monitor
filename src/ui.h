@@ -17,26 +17,24 @@ struct ConfirmDialog {
 
 // Per-GPU configuration (keyed by UUID)
 struct GpuConfig {
-    char uuid[128] = "";        // GPU UUID (unique identifier)
-    char nickname[64] = "";     // User-defined nickname (e.g., "TOP", "Compute 1")
+    std::string uuid;           // GPU UUID (unique identifier)
+    std::string nickname;       // User-defined nickname (e.g., "TOP", "Compute 1")
     int displayOrder = -1;      // User-defined display order (-1 = use default bus ID order)
 };
 
 // Quick launch preset
 struct QuickLaunchPreset {
-    char name[64] = "";
-    char command[512] = "";
-    char workingDir[512] = "";
+    std::string name;
+    std::string command;
+    std::string workingDir;
     // GPU selection stored as comma-separated UUIDs (empty = all GPUs)
-    char selectedGpuUuids[512] = "";
+    std::string selectedGpuUuids;
 };
 
 // Global settings
 struct Settings {
-    QuickLaunchPreset presets[5];   // Up to 5 quick launch presets
-    int presetCount = 0;
-    GpuConfig gpuConfigs[8];        // Up to 8 GPUs
-    int gpuConfigCount = 0;
+    std::vector<QuickLaunchPreset> presets;  // Quick launch presets
+    std::vector<GpuConfig> gpuConfigs;       // GPU configurations
 };
 
 // Drag-and-drop state

@@ -7,12 +7,15 @@
 
 #include <d3d11.h>
 #include <tchar.h>
+#include <wrl/client.h>
 
-// DirectX 11 globals
-static ID3D11Device*            g_pd3dDevice = nullptr;
-static ID3D11DeviceContext*     g_pd3dDeviceContext = nullptr;
-static IDXGISwapChain*          g_pSwapChain = nullptr;
-static ID3D11RenderTargetView*  g_mainRenderTargetView = nullptr;
+using Microsoft::WRL::ComPtr;
+
+// DirectX 11 globals (using ComPtr for automatic Release())
+static ComPtr<ID3D11Device>            g_pd3dDevice;
+static ComPtr<ID3D11DeviceContext>     g_pd3dDeviceContext;
+static ComPtr<IDXGISwapChain>          g_pSwapChain;
+static ComPtr<ID3D11RenderTargetView>  g_mainRenderTargetView;
 
 // Forward declarations
 bool CreateDeviceD3D(HWND hWnd);
@@ -28,16 +31,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     (void)hPrevInstance;
     (void)lpCmdLine;
 
-    // Create application window
+    // Create application window (C++20 designated initializers)
     WNDCLASSEX wc = {
-        sizeof(WNDCLASSEX),
-        CS_CLASSDC,
-        WndProc,
-        0L, 0L,
-        hInstance,
-        nullptr, nullptr, nullptr, nullptr,
-        _T("GPU Monitor"),
-        nullptr
+        .cbSize = sizeof(WNDCLASSEX),
+        .style = CS_CLASSDC,
+        .lpfnWndProc = WndProc,
+        .cbClsExtra = 0L,
+        .cbWndExtra = 0L,
+        .hInstance = hInstance,
+        .hIcon = nullptr,
+        .hCursor = nullptr,
+        .hbrBackground = nullptr,
+        .lpszMenuName = nullptr,
+        .lpszClassName = _T("GPU Monitor"),
+        .hIconSm = nullptr
     };
     RegisterClassEx(&wc);
 
@@ -77,7 +84,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     // Setup Platform/Renderer backends
     ImGui_ImplWin32_Init(hwnd);
-    ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    ImGui_ImplDX11_Init(g_pd3dDevice.Get(), g_pd3dDeviceContext.Get());
 
     // Initialize GPU monitoring
     GpuMonitor gpuMonitor;
@@ -125,8 +132,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             clearColor.z * clearColor.w,
             clearColor.w
         };
-        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
-        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clearColorArray);
+        ID3D11RenderTargetView* rtv = g_mainRenderTargetView.Get();
+        g_pd3dDeviceContext->OMSetRenderTargets(1, &rtv, nullptr);
+        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView.Get(), clearColorArray);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
         // Present with vsync
@@ -179,10 +187,10 @@ bool CreateDeviceD3D(HWND hWnd) {
         2,
         D3D11_SDK_VERSION,
         &sd,
-        &g_pSwapChain,
-        &g_pd3dDevice,
+        g_pSwapChain.GetAddressOf(),
+        g_pd3dDevice.GetAddressOf(),
         &featureLevel,
-        &g_pd3dDeviceContext
+        g_pd3dDeviceContext.GetAddressOf()
     );
 
     if (res != S_OK) return false;
@@ -193,25 +201,23 @@ bool CreateDeviceD3D(HWND hWnd) {
 
 void CleanupDeviceD3D() {
     CleanupRenderTarget();
-    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
-    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = nullptr; }
-    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = nullptr; }
+    // ComPtr handles Release() automatically via Reset()
+    g_pSwapChain.Reset();
+    g_pd3dDeviceContext.Reset();
+    g_pd3dDevice.Reset();
 }
 
 void CreateRenderTarget() {
-    ID3D11Texture2D* pBackBuffer = nullptr;
-    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    ComPtr<ID3D11Texture2D> pBackBuffer;
+    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(pBackBuffer.GetAddressOf()));
     if (pBackBuffer) {
-        g_pd3dDevice->CreateRenderTargetView(pBackBuffer, nullptr, &g_mainRenderTargetView);
-        pBackBuffer->Release();
+        g_pd3dDevice->CreateRenderTargetView(pBackBuffer.Get(), nullptr, g_mainRenderTargetView.GetAddressOf());
+        // pBackBuffer auto-releases when ComPtr goes out of scope
     }
 }
 
 void CleanupRenderTarget() {
-    if (g_mainRenderTargetView) {
-        g_mainRenderTargetView->Release();
-        g_mainRenderTargetView = nullptr;
-    }
+    g_mainRenderTargetView.Reset();
 }
 
 LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -220,7 +226,7 @@ LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     switch (msg) {
     case WM_SIZE:
-        if (g_pd3dDevice != nullptr && wParam != SIZE_MINIMIZED) {
+        if (g_pd3dDevice && wParam != SIZE_MINIMIZED) {
             CleanupRenderTarget();
             g_pSwapChain->ResizeBuffers(0, (UINT)LOWORD(lParam), (UINT)HIWORD(lParam),
                                          DXGI_FORMAT_UNKNOWN, 0);

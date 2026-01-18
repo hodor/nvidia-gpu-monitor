@@ -5,7 +5,7 @@
 #include <map>
 #include <thread>
 #include <mutex>
-#include <atomic>
+#include <stop_token>
 
 // Process running on a GPU
 struct GpuProcess {
@@ -81,7 +81,7 @@ public:
     void stopPolling();
 
 private:
-    void pollThread();
+    void pollThread(std::stop_token stopToken);
     void updateStats();
     void updateSystemInfo();
     std::string getProcessName(unsigned int pid);
@@ -89,8 +89,7 @@ private:
     std::vector<GpuStats> m_stats;
     SystemInfo m_systemInfo;
     std::mutex m_mutex;
-    std::thread m_pollThread;
-    std::atomic<bool> m_running{false};
+    std::jthread m_pollThread;
     int m_pollIntervalMs{1000};
     bool m_initialized{false};
 };

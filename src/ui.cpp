@@ -3,11 +3,27 @@
 #include <Windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
-#include <sstream>
+#include <format>
+#include <ranges>
 #include <fstream>
 #include <filesystem>
+#include <memory>
 
 namespace fs = std::filesystem;
+
+// Helper for ImGui::InputText with std::string
+static bool InputTextString(const char* label, std::string& str, ImGuiInputTextFlags flags = 0) {
+    constexpr size_t bufferSize = 512;
+    char buffer[bufferSize];
+    strncpy_s(buffer, str.c_str(), bufferSize - 1);
+    buffer[bufferSize - 1] = '\0';
+
+    bool changed = ImGui::InputText(label, buffer, bufferSize, flags);
+    if (changed) {
+        str = buffer;
+    }
+    return changed;
+}
 
 GpuMonitorUI::GpuMonitorUI() {
     loadSettings();
@@ -17,10 +33,13 @@ std::string GpuMonitorUI::getSettingsPath() {
     char* userProfile = nullptr;
     size_t len = 0;
     _dupenv_s(&userProfile, &len, "USERPROFILE");
+
+    // RAII wrapper ensures free() is called even if an exception occurs
+    std::unique_ptr<char, decltype(&free)> profileGuard(userProfile, free);
+
     std::string path;
     if (userProfile) {
-        path = std::string(userProfile) + "\\.gpu_monitor";
-        free(userProfile);
+        path = std::format("{}\\.gpu_monitor", userProfile);
     } else {
         path = ".";
     }
@@ -33,10 +52,10 @@ void GpuMonitorUI::loadSettings() {
     if (!file.is_open()) return;
 
     std::string line;
-    int presetIndex = -1;
-    int gpuConfigIndex = -1;
     bool inPresets = false;
     bool inGpuConfigs = false;
+    QuickLaunchPreset* currentPreset = nullptr;
+    GpuConfig* currentConfig = nullptr;
 
     while (std::getline(file, line)) {
         // Track which section we're in
@@ -54,38 +73,33 @@ void GpuMonitorUI::loadSettings() {
         // Parse presets section
         if (inPresets) {
             if (line.find("\"preset\"") != std::string::npos) {
-                presetIndex++;
-                if (presetIndex >= 5) {
-                    inPresets = false;
-                    continue;
-                }
-                m_settings.presetCount = presetIndex + 1;
-            } else if (presetIndex >= 0 && presetIndex < 5) {
-                auto& preset = m_settings.presets[presetIndex];
+                m_settings.presets.emplace_back();
+                currentPreset = &m_settings.presets.back();
+            } else if (currentPreset) {
                 size_t pos;
                 if ((pos = line.find("\"name\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 7) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(preset.name, line.substr(start, end - start).c_str(), sizeof(preset.name) - 1);
+                        currentPreset->name = line.substr(start, end - start);
                     }
                 } else if ((pos = line.find("\"command\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 10) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(preset.command, line.substr(start, end - start).c_str(), sizeof(preset.command) - 1);
+                        currentPreset->command = line.substr(start, end - start);
                     }
                 } else if ((pos = line.find("\"workingDir\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 13) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(preset.workingDir, line.substr(start, end - start).c_str(), sizeof(preset.workingDir) - 1);
+                        currentPreset->workingDir = line.substr(start, end - start);
                     }
                 } else if ((pos = line.find("\"selectedGpuUuids\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 19) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(preset.selectedGpuUuids, line.substr(start, end - start).c_str(), sizeof(preset.selectedGpuUuids) - 1);
+                        currentPreset->selectedGpuUuids = line.substr(start, end - start);
                     }
                 }
             }
@@ -94,31 +108,26 @@ void GpuMonitorUI::loadSettings() {
         // Parse GPU configs section
         if (inGpuConfigs) {
             if (line.find("\"gpuConfig\"") != std::string::npos) {
-                gpuConfigIndex++;
-                if (gpuConfigIndex >= 8) {
-                    inGpuConfigs = false;
-                    continue;
-                }
-                m_settings.gpuConfigCount = gpuConfigIndex + 1;
-            } else if (gpuConfigIndex >= 0 && gpuConfigIndex < 8) {
-                auto& config = m_settings.gpuConfigs[gpuConfigIndex];
+                m_settings.gpuConfigs.emplace_back();
+                currentConfig = &m_settings.gpuConfigs.back();
+            } else if (currentConfig) {
                 size_t pos;
                 if ((pos = line.find("\"uuid\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 7) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(config.uuid, line.substr(start, end - start).c_str(), sizeof(config.uuid) - 1);
+                        currentConfig->uuid = line.substr(start, end - start);
                     }
                 } else if ((pos = line.find("\"nickname\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 11) + 1;
                     size_t end = line.find("\"", start);
                     if (start != std::string::npos && end != std::string::npos) {
-                        strncpy_s(config.nickname, line.substr(start, end - start).c_str(), sizeof(config.nickname) - 1);
+                        currentConfig->nickname = line.substr(start, end - start);
                     }
                 } else if ((pos = line.find("\"displayOrder\":")) != std::string::npos) {
                     size_t start = pos + 15;
                     while (start < line.size() && (line[start] == ' ' || line[start] == ':')) start++;
-                    config.displayOrder = std::atoi(line.c_str() + start);
+                    currentConfig->displayOrder = std::atoi(line.c_str() + start);
                 }
             }
         }
@@ -141,7 +150,7 @@ void GpuMonitorUI::saveSettings() {
 
     // Write presets
     file << "  \"presets\": [\n";
-    for (int i = 0; i < m_settings.presetCount; i++) {
+    for (size_t i = 0; i < m_settings.presets.size(); i++) {
         const auto& preset = m_settings.presets[i];
         file << "    {\n";
         file << "      \"preset\": " << i << ",\n";
@@ -149,20 +158,20 @@ void GpuMonitorUI::saveSettings() {
         file << "      \"command\": \"" << preset.command << "\",\n";
         file << "      \"workingDir\": \"" << preset.workingDir << "\",\n";
         file << "      \"selectedGpuUuids\": \"" << preset.selectedGpuUuids << "\"\n";
-        file << "    }" << (i < m_settings.presetCount - 1 ? "," : "") << "\n";
+        file << "    }" << (i < m_settings.presets.size() - 1 ? "," : "") << "\n";
     }
     file << "  ],\n";
 
     // Write GPU configs
     file << "  \"gpuConfigs\": [\n";
-    for (int i = 0; i < m_settings.gpuConfigCount; i++) {
+    for (size_t i = 0; i < m_settings.gpuConfigs.size(); i++) {
         const auto& config = m_settings.gpuConfigs[i];
         file << "    {\n";
         file << "      \"gpuConfig\": " << i << ",\n";
         file << "      \"uuid\": \"" << config.uuid << "\",\n";
         file << "      \"nickname\": \"" << config.nickname << "\",\n";
         file << "      \"displayOrder\": " << config.displayOrder << "\n";
-        file << "    }" << (i < m_settings.gpuConfigCount - 1 ? "," : "") << "\n";
+        file << "    }" << (i < m_settings.gpuConfigs.size() - 1 ? "," : "") << "\n";
     }
     file << "  ]\n";
 
@@ -193,9 +202,9 @@ void GpuMonitorUI::showCopiedToast(const std::string& label) {
 }
 
 GpuConfig* GpuMonitorUI::getGpuConfig(const std::string& uuid) {
-    for (int i = 0; i < m_settings.gpuConfigCount; i++) {
-        if (uuid == m_settings.gpuConfigs[i].uuid) {
-            return &m_settings.gpuConfigs[i];
+    for (auto& config : m_settings.gpuConfigs) {
+        if (uuid == config.uuid) {
+            return &config;
         }
     }
     return nullptr;
@@ -205,21 +214,17 @@ GpuConfig* GpuMonitorUI::getOrCreateGpuConfig(const std::string& uuid) {
     GpuConfig* existing = getGpuConfig(uuid);
     if (existing) return existing;
 
-    // Create new config if we have space
-    if (m_settings.gpuConfigCount < 8) {
-        auto& config = m_settings.gpuConfigs[m_settings.gpuConfigCount];
-        strncpy_s(config.uuid, uuid.c_str(), sizeof(config.uuid) - 1);
-        config.nickname[0] = '\0';
-        config.displayOrder = -1;
-        m_settings.gpuConfigCount++;
-        return &config;
-    }
-    return nullptr;
+    // Create new config
+    m_settings.gpuConfigs.emplace_back();
+    auto& config = m_settings.gpuConfigs.back();
+    config.uuid = uuid;
+    config.displayOrder = -1;
+    return &config;
 }
 
 std::string GpuMonitorUI::getGpuDisplayName(const GpuStats& stats) {
     GpuConfig* config = getGpuConfig(stats.uuid);
-    if (config && config->nickname[0] != '\0') {
+    if (config && !config->nickname.empty()) {
         return config->nickname;
     }
     // Default: use CUDA index
@@ -229,7 +234,7 @@ std::string GpuMonitorUI::getGpuDisplayName(const GpuStats& stats) {
 std::vector<GpuStats> GpuMonitorUI::sortGpusByUserOrder(const std::vector<GpuStats>& gpuStats) {
     std::vector<GpuStats> sorted = gpuStats;
 
-    std::sort(sorted.begin(), sorted.end(), [this](const GpuStats& a, const GpuStats& b) {
+    std::ranges::sort(sorted, [this](const GpuStats& a, const GpuStats& b) {
         GpuConfig* configA = getGpuConfig(a.uuid);
         GpuConfig* configB = getGpuConfig(b.uuid);
 
@@ -359,30 +364,26 @@ void GpuMonitorUI::commitReorder(int sourceIndex, int targetIndex, const std::ve
 }
 
 std::string GpuMonitorUI::buildExcludeDevices(const std::vector<GpuStats>& allStats, unsigned int excludeIndex) {
-    std::stringstream ss;
-    bool first = true;
+    std::string result;
     for (const auto& gpu : allStats) {
         if (gpu.cudaIndex != excludeIndex) {
-            if (!first) ss << ",";
-            ss << gpu.cudaIndex;
-            first = false;
+            if (!result.empty()) result += ",";
+            result += std::format("{}", gpu.cudaIndex);
         }
     }
-    return ss.str();
+    return result;
 }
 
 std::string GpuMonitorUI::buildNvlinkPair(const std::vector<GpuStats>& allStats) {
     // Return all TCC (compute) GPUs - these are typically the NVLink-capable ones
-    std::stringstream ss;
-    bool first = true;
+    std::string result;
     for (const auto& gpu : allStats) {
         if (gpu.isTCC) {
-            if (!first) ss << ",";
-            ss << gpu.cudaIndex;
-            first = false;
+            if (!result.empty()) result += ",";
+            result += std::format("{}", gpu.cudaIndex);
         }
     }
-    return ss.str();
+    return result;
 }
 
 void GpuMonitorUI::openTerminalWithGpu(const std::string& cudaDevices, const std::string& label) {
@@ -439,16 +440,15 @@ void GpuMonitorUI::renderSystemHealth(const SystemInfo& sysInfo) {
 std::string GpuMonitorUI::buildGpuSelectionString(const QuickLaunchPreset& preset, const std::vector<GpuStats>& gpuStats) {
     // Build CUDA_VISIBLE_DEVICES string from selected GPU UUIDs
     // If no GPUs selected (empty string), return empty (means all)
-    if (preset.selectedGpuUuids[0] == '\0') {
+    if (preset.selectedGpuUuids.empty()) {
         return "";
     }
 
     std::string result;
-    std::string uuids = preset.selectedGpuUuids;
 
     for (const auto& gpu : gpuStats) {
         // Check if this GPU's UUID is in the selected list
-        if (uuids.find(gpu.uuid) != std::string::npos) {
+        if (preset.selectedGpuUuids.find(gpu.uuid) != std::string::npos) {
             if (!result.empty()) result += ",";
             result += std::to_string(gpu.cudaIndex);
         }
@@ -457,12 +457,12 @@ std::string GpuMonitorUI::buildGpuSelectionString(const QuickLaunchPreset& prese
 }
 
 bool GpuMonitorUI::isGpuSelectedInPreset(const QuickLaunchPreset& preset, const std::string& uuid) {
-    if (preset.selectedGpuUuids[0] == '\0') return false;
-    return std::string(preset.selectedGpuUuids).find(uuid) != std::string::npos;
+    if (preset.selectedGpuUuids.empty()) return false;
+    return preset.selectedGpuUuids.find(uuid) != std::string::npos;
 }
 
 void GpuMonitorUI::toggleGpuInPreset(QuickLaunchPreset& preset, const std::string& uuid) {
-    std::string uuids = preset.selectedGpuUuids;
+    std::string& uuids = preset.selectedGpuUuids;
 
     size_t pos = uuids.find(uuid);
     if (pos != std::string::npos) {
@@ -478,8 +478,6 @@ void GpuMonitorUI::toggleGpuInPreset(QuickLaunchPreset& preset, const std::strin
         if (!uuids.empty()) uuids += ",";
         uuids += uuid;
     }
-
-    strncpy_s(preset.selectedGpuUuids, uuids.c_str(), sizeof(preset.selectedGpuUuids) - 1);
 }
 
 void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
@@ -487,13 +485,13 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
         ImGui::Indent(10);
 
         // Show existing presets
-        for (int i = 0; i < m_settings.presetCount; i++) {
-            ImGui::PushID(i);
+        for (size_t i = 0; i < m_settings.presets.size(); i++) {
+            ImGui::PushID(static_cast<int>(i));
             auto& preset = m_settings.presets[i];
 
             // Build GPU label from selected GPUs
             std::string gpuLabel;
-            if (preset.selectedGpuUuids[0] == '\0') {
+            if (preset.selectedGpuUuids.empty()) {
                 gpuLabel = "ALL";
             } else {
                 int count = 0;
@@ -507,7 +505,7 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 if (gpuLabel.empty()) gpuLabel = "ALL";
             }
 
-            if (ImGui::Button(preset.name[0] ? preset.name : "Unnamed")) {
+            if (ImGui::Button(!preset.name.empty() ? preset.name.c_str() : "Unnamed")) {
                 // Launch the preset
                 std::string gpuSel = buildGpuSelectionString(preset, gpuStats);
 
@@ -516,12 +514,12 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                     psCommand = "$env:CUDA_VISIBLE_DEVICES='" + gpuSel + "'; ";
                     psCommand += "Write-Host 'CUDA_VISIBLE_DEVICES = " + gpuSel + "' -ForegroundColor Green; ";
                 }
-                if (preset.command[0]) {
+                if (!preset.command.empty()) {
                     psCommand += preset.command;
                 }
 
                 std::string args = "-NoExit -Command \"" + psCommand + "\"";
-                const char* workDir = (preset.workingDir[0] != '\0') ? preset.workingDir : nullptr;
+                const char* workDir = !preset.workingDir.empty() ? preset.workingDir.c_str() : nullptr;
                 ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
                 showCopiedToast("Launched");
             }
@@ -536,11 +534,10 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
             ImGui::SameLine();
             if (ImGui::SmallButton("X")) {
                 // Remove preset
-                for (int j = i; j < m_settings.presetCount - 1; j++) {
-                    m_settings.presets[j] = m_settings.presets[j + 1];
-                }
-                m_settings.presetCount--;
+                m_settings.presets.erase(m_settings.presets.begin() + i);
                 saveSettings();
+                ImGui::PopID();
+                break;  // Iterator invalidated, exit loop
             }
 
             // Edit popup
@@ -549,7 +546,7 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                ImGui::InputText("Name", preset.name, sizeof(preset.name));
+                InputTextString("Name", preset.name);
 
                 ImGui::Spacing();
                 ImGui::Text("GPUs:");
@@ -568,7 +565,7 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 }
 
                 ImGui::Spacing();
-                ImGui::InputText("Working Dir", preset.workingDir, sizeof(preset.workingDir));
+                InputTextString("Working Dir", preset.workingDir);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("...")) {
                     // Browse for folder
@@ -579,14 +576,14 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                     if (pidl != nullptr) {
                         char path[MAX_PATH];
                         if (SHGetPathFromIDListA(pidl, path)) {
-                            strncpy_s(preset.workingDir, path, sizeof(preset.workingDir) - 1);
+                            preset.workingDir = path;
                         }
                         CoTaskMemFree(pidl);
                     }
                 }
 
                 ImGui::Spacing();
-                ImGui::InputText("Command", preset.command, sizeof(preset.command));
+                InputTextString("Command", preset.command);
                 ImGui::TextDisabled("(optional - runs after setting GPU)");
 
                 ImGui::Spacing();
@@ -604,14 +601,11 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
         }
 
         // Add new preset button
-        if (m_settings.presetCount < 5) {
+        if (m_settings.presets.size() < 5) {
             if (ImGui::Button("+ Add Preset")) {
-                auto& preset = m_settings.presets[m_settings.presetCount];
-                strcpy_s(preset.name, "New Preset");
-                preset.command[0] = '\0';
-                preset.workingDir[0] = '\0';
-                preset.selectedGpuUuids[0] = '\0';
-                m_settings.presetCount++;
+                QuickLaunchPreset preset;
+                preset.name = "New Preset";
+                m_settings.presets.push_back(std::move(preset));
                 saveSettings();
             }
         }
@@ -901,8 +895,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
                 cardState.focusNickname = false;
             }
 
-            bool enterPressed = ImGui::InputText("##nickname", config->nickname, sizeof(config->nickname),
-                ImGuiInputTextFlags_EnterReturnsTrue);
+            bool enterPressed = InputTextString("##nickname", config->nickname, ImGuiInputTextFlags_EnterReturnsTrue);
 
             if (enterPressed) {
                 saveSettings();
@@ -1049,8 +1042,8 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // Use only this GPU
     {
-        std::string idx = std::to_string(stats.cudaIndex);
-        std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + idx + "\"";
+        std::string idx = std::format("{}", stats.cudaIndex);
+        std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", idx);
         if (ImGui::Button("Use Only This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("CUDA_VISIBLE_DEVICES");
@@ -1068,7 +1061,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
         std::string tccIndices = buildNvlinkPair(allStats);
         if (!tccIndices.empty() && tccIndices.find(',') != std::string::npos) {
             // Only show if there are multiple TCC GPUs
-            std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + tccIndices + "\"";
+            std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", tccIndices);
             if (ImGui::Button("Use All TCC GPUs")) {
                 copyToClipboard(cmd);
                 showCopiedToast("TCC GPUs");
@@ -1085,14 +1078,14 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Exclude this GPU
     {
         std::string otherIndices = buildExcludeDevices(allStats, stats.cudaIndex);
-        std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + otherIndices + "\"";
+        std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", otherIndices);
         if (ImGui::Button("Exclude This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("Exclude GPU");
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Open Terminal##exclude")) {
-            openTerminalWithGpu(otherIndices, "Excluding " + displayName);
+            openTerminalWithGpu(otherIndices, std::format("Excluding {}", displayName));
         }
         ImGui::SameLine();
         ImGui::TextDisabled("cuda:%s", otherIndices.c_str());
@@ -1120,7 +1113,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // nvidia-smi for this GPU
     {
-        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex);
+        std::string cmd = std::format("nvidia-smi -i {}", stats.cudaIndex);
         if (ImGui::Button("nvidia-smi")) {
             copyToClipboard(cmd);
             showCopiedToast("nvidia-smi command");
@@ -1139,16 +1132,17 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     {
         std::string targetMode = stats.isTCC ? "WDDM" : "TCC";
         int modeValue = stats.isTCC ? 0 : 1;
-        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " -dm " + std::to_string(modeValue);
+        std::string cmd = std::format("nvidia-smi -i {} -dm {}", stats.cudaIndex, modeValue);
 
-        std::string btnLabel = "Switch to " + targetMode;
+        std::string btnLabel = std::format("Switch to {}", targetMode);
         if (ImGui::Button(btnLabel.c_str())) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Toggle Driver Mode";
-            m_confirmDialog.message = "This will switch GPU " + std::to_string(stats.cudaIndex) +
-                " (" + displayName + ") from " + (stats.isTCC ? "TCC" : "WDDM") +
-                " to " + targetMode + " mode.\n\nA system restart is required for this change to take effect.";
+            m_confirmDialog.message = std::format(
+                "This will switch GPU {} ({}) from {} to {} mode.\n\n"
+                "A system restart is required for this change to take effect.",
+                stats.cudaIndex, displayName, stats.isTCC ? "TCC" : "WDDM", targetMode);
             m_confirmDialog.command = cmd;
         }
     }
@@ -1157,13 +1151,14 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // Reset GPU
     {
-        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " --gpu-reset";
+        std::string cmd = std::format("nvidia-smi -i {} --gpu-reset", stats.cudaIndex);
         if (ImGui::Button("Reset GPU")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Reset GPU";
-            m_confirmDialog.message = "This will reset GPU " + std::to_string(stats.cudaIndex) +
-                " (" + displayName + ").\n\nAll running processes on this GPU will be terminated.";
+            m_confirmDialog.message = std::format(
+                "This will reset GPU {} ({}).\n\nAll running processes on this GPU will be terminated.",
+                stats.cudaIndex, displayName);
             m_confirmDialog.command = cmd;
         }
     }
@@ -1175,16 +1170,17 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     const unsigned int powerPresets[] = {200, 250, 300};
     for (int i = 0; i < 3; i++) {
         unsigned int watts = powerPresets[i];
-        std::string label = std::to_string(watts) + "W";
-        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " -pl " + std::to_string(watts);
+        std::string label = std::format("{}W", watts);
+        std::string cmd = std::format("nvidia-smi -i {} -pl {}", stats.cudaIndex, watts);
 
         if (i > 0) ImGui::SameLine();
         if (ImGui::SmallButton(label.c_str())) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Set Power Limit";
-            m_confirmDialog.message = "This will set the power limit for GPU " + std::to_string(stats.cudaIndex) +
-                " (" + displayName + ") to " + std::to_string(watts) + "W.";
+            m_confirmDialog.message = std::format(
+                "This will set the power limit for GPU {} ({}) to {}W.",
+                stats.cudaIndex, displayName, watts);
             m_confirmDialog.command = cmd;
         }
     }
@@ -1192,18 +1188,17 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Kill processes on this GPU
     {
         // This uses a PowerShell one-liner to find and kill processes
-        std::stringstream ss;
-        ss << "(nvidia-smi -i " << stats.cudaIndex << " --query-compute-apps=pid --format=csv,noheader) | "
-           << "ForEach-Object { Stop-Process -Id $_ -Force }";
-        std::string cmd = ss.str();
+        std::string cmd = std::format(
+            "(nvidia-smi -i {} --query-compute-apps=pid --format=csv,noheader) | "
+            "ForEach-Object {{ Stop-Process -Id $_ -Force }}", stats.cudaIndex);
 
         if (ImGui::Button("Kill All Processes")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Kill GPU Processes";
-            m_confirmDialog.message = "This will forcefully terminate ALL processes running on GPU " +
-                std::to_string(stats.cudaIndex) + " (" + displayName + ").\n\n" +
-                "This may cause data loss in running applications!";
+            m_confirmDialog.message = std::format(
+                "This will forcefully terminate ALL processes running on GPU {} ({}).\n\n"
+                "This may cause data loss in running applications!", stats.cudaIndex, displayName);
             m_confirmDialog.command = cmd;
         }
     }

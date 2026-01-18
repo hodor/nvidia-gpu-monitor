@@ -1,10 +1,40 @@
 #include "gpu_monitor.h"
 #include <nvml.h>
 #include <algorithm>
+#include <ranges>
 #include <chrono>
+#include <format>
 #define NOMINMAX
 #include <Windows.h>
 #include <Psapi.h>
+
+// RAII wrapper for Windows HANDLE
+class ScopedHandle {
+public:
+    explicit ScopedHandle(HANDLE h = nullptr) noexcept : m_handle(h) {}
+    ~ScopedHandle() { if (m_handle) CloseHandle(m_handle); }
+
+    // Non-copyable
+    ScopedHandle(const ScopedHandle&) = delete;
+    ScopedHandle& operator=(const ScopedHandle&) = delete;
+
+    // Movable
+    ScopedHandle(ScopedHandle&& other) noexcept : m_handle(other.m_handle) { other.m_handle = nullptr; }
+    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+        if (this != &other) {
+            if (m_handle) CloseHandle(m_handle);
+            m_handle = other.m_handle;
+            other.m_handle = nullptr;
+        }
+        return *this;
+    }
+
+    explicit operator bool() const noexcept { return m_handle != nullptr; }
+    HANDLE get() const noexcept { return m_handle; }
+
+private:
+    HANDLE m_handle;
+};
 
 GpuMonitor::GpuMonitor() = default;
 
@@ -35,15 +65,14 @@ void GpuMonitor::shutdown() {
 }
 
 std::string GpuMonitor::getProcessName(unsigned int pid) {
-    HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-    if (hProcess == nullptr) {
+    ScopedHandle hProcess(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
+    if (!hProcess) {
         return "Unknown";
     }
 
     char processName[MAX_PATH] = "";
     DWORD size = MAX_PATH;
-    if (QueryFullProcessImageNameA(hProcess, 0, processName, &size)) {
-        CloseHandle(hProcess);
+    if (QueryFullProcessImageNameA(hProcess.get(), 0, processName, &size)) {
         // Extract just the filename
         std::string fullPath(processName);
         size_t pos = fullPath.find_last_of("\\/");
@@ -53,7 +82,6 @@ std::string GpuMonitor::getProcessName(unsigned int pid) {
         return fullPath;
     }
 
-    CloseHandle(hProcess);
     return "Unknown";
 }
 
@@ -176,17 +204,14 @@ void GpuMonitor::updateStats() {
         processCount = 32;
         if (nvmlDeviceGetGraphicsRunningProcesses(device, &processCount, processInfos) == NVML_SUCCESS) {
             for (unsigned int p = 0; p < processCount; p++) {
-                // Avoid duplicates
-                bool found = false;
-                for (const auto& existing : stats.processes) {
-                    if (existing.pid == processInfos[p].pid) {
-                        found = true;
-                        break;
-                    }
-                }
+                // Avoid duplicates using std::ranges
+                unsigned int pid = processInfos[p].pid;
+                bool found = std::ranges::any_of(stats.processes, [pid](const auto& proc) {
+                    return proc.pid == pid;
+                });
                 if (!found) {
                     GpuProcess proc;
-                    proc.pid = processInfos[p].pid;
+                    proc.pid = pid;
                     proc.usedMemory = processInfos[p].usedGpuMemory;
                     proc.name = getProcessName(proc.pid);
                     stats.processes.push_back(proc);
@@ -213,10 +238,7 @@ void GpuMonitor::updateStats() {
     }
 
     // Sort by PCI bus ID (matches physical slot order when looking at hardware)
-    std::sort(newStats.begin(), newStats.end(),
-              [](const GpuStats& a, const GpuStats& b) {
-                  return a.pciBusId < b.pciBusId;
-              });
+    std::ranges::sort(newStats, {}, &GpuStats::pciBusId);
 
     // Update shared stats
     {
@@ -251,7 +273,7 @@ void GpuMonitor::updateSystemInfo() {
     if (nvmlSystemGetCudaDriverVersion(&cudaVersion) == NVML_SUCCESS) {
         int major = cudaVersion / 1000;
         int minor = (cudaVersion % 1000) / 10;
-        info.cudaVersion = std::to_string(major) + "." + std::to_string(minor);
+        info.cudaVersion = std::format("{}.{}", major, minor);
     }
 
     // NVLink status - check connections between GPUs
@@ -281,16 +303,11 @@ void GpuMonitor::updateSystemInfo() {
                                 if (nvmlDeviceGetPciInfo(otherDevice, &otherPci) == NVML_SUCCESS) {
                                     if (strcmp(remotePci.busId, otherPci.busId) == 0) {
                                         // Found a connection
-                                        auto pair = std::make_pair(std::min(i, j), std::max(i, j));
+                                        auto pair = std::make_pair(
+                                            static_cast<int>(std::min(i, j)),
+                                            static_cast<int>(std::max(i, j)));
                                         // Avoid duplicates
-                                        bool found = false;
-                                        for (const auto& existing : info.nvlinkPairs) {
-                                            if (existing == pair) {
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
+                                        if (std::find(info.nvlinkPairs.begin(), info.nvlinkPairs.end(), pair) == info.nvlinkPairs.end()) {
                                             info.nvlinkPairs.push_back(pair);
                                         }
                                     }
@@ -308,29 +325,29 @@ void GpuMonitor::updateSystemInfo() {
 }
 
 void GpuMonitor::startPolling(int intervalMs) {
-    if (m_running) return;
+    if (m_pollThread.joinable()) return;
 
     m_pollIntervalMs = intervalMs;
-    m_running = true;
-    m_pollThread = std::thread(&GpuMonitor::pollThread, this);
+    m_pollThread = std::jthread([this](std::stop_token stopToken) {
+        pollThread(stopToken);
+    });
 }
 
 void GpuMonitor::stopPolling() {
-    if (!m_running) return;
-
-    m_running = false;
     if (m_pollThread.joinable()) {
-        m_pollThread.join();
+        m_pollThread.request_stop();
+        // jthread auto-joins on destruction, but we want immediate stop
+        m_pollThread = std::jthread{};
     }
 }
 
-void GpuMonitor::pollThread() {
-    while (m_running) {
+void GpuMonitor::pollThread(std::stop_token stopToken) {
+    while (!stopToken.stop_requested()) {
         updateStats();
 
         // Sleep in small increments to allow quick shutdown
         int slept = 0;
-        while (slept < m_pollIntervalMs && m_running) {
+        while (slept < m_pollIntervalMs && !stopToken.stop_requested()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             slept += 100;
         }
