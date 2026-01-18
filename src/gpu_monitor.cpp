@@ -1,40 +1,10 @@
 #include "gpu_monitor.h"
+#include "platform/platform.h"
 #include <nvml.h>
 #include <algorithm>
 #include <ranges>
 #include <chrono>
 #include <format>
-#define NOMINMAX
-#include <Windows.h>
-#include <Psapi.h>
-
-// RAII wrapper for Windows HANDLE
-class ScopedHandle {
-public:
-    explicit ScopedHandle(HANDLE h = nullptr) noexcept : m_handle(h) {}
-    ~ScopedHandle() { if (m_handle) CloseHandle(m_handle); }
-
-    // Non-copyable
-    ScopedHandle(const ScopedHandle&) = delete;
-    ScopedHandle& operator=(const ScopedHandle&) = delete;
-
-    // Movable
-    ScopedHandle(ScopedHandle&& other) noexcept : m_handle(other.m_handle) { other.m_handle = nullptr; }
-    ScopedHandle& operator=(ScopedHandle&& other) noexcept {
-        if (this != &other) {
-            if (m_handle) CloseHandle(m_handle);
-            m_handle = other.m_handle;
-            other.m_handle = nullptr;
-        }
-        return *this;
-    }
-
-    explicit operator bool() const noexcept { return m_handle != nullptr; }
-    HANDLE get() const noexcept { return m_handle; }
-
-private:
-    HANDLE m_handle;
-};
 
 GpuMonitor::GpuMonitor() = default;
 
@@ -65,24 +35,7 @@ void GpuMonitor::shutdown() {
 }
 
 std::string GpuMonitor::getProcessName(unsigned int pid) {
-    ScopedHandle hProcess(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
-    if (!hProcess) {
-        return "Unknown";
-    }
-
-    char processName[MAX_PATH] = "";
-    DWORD size = MAX_PATH;
-    if (QueryFullProcessImageNameA(hProcess.get(), 0, processName, &size)) {
-        // Extract just the filename
-        std::string fullPath(processName);
-        size_t pos = fullPath.find_last_of("\\/");
-        if (pos != std::string::npos) {
-            return fullPath.substr(pos + 1);
-        }
-        return fullPath;
-    }
-
-    return "Unknown";
+    return Platform::getProcessName(pid);
 }
 
 void GpuMonitor::updateStats() {

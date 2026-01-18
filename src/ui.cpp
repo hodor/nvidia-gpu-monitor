@@ -1,13 +1,10 @@
 #include "ui.h"
+#include "platform/platform.h"
 #include "imgui.h"
-#include <Windows.h>
-#include <shellapi.h>
-#include <shlobj.h>
 #include <format>
 #include <ranges>
 #include <fstream>
 #include <filesystem>
-#include <memory>
 
 namespace fs = std::filesystem;
 
@@ -15,8 +12,7 @@ namespace fs = std::filesystem;
 static bool InputTextString(const char* label, std::string& str, ImGuiInputTextFlags flags = 0) {
     constexpr size_t bufferSize = 512;
     char buffer[bufferSize];
-    strncpy_s(buffer, str.c_str(), bufferSize - 1);
-    buffer[bufferSize - 1] = '\0';
+    Platform::safeCopy(buffer, bufferSize, str.c_str());
 
     bool changed = ImGui::InputText(label, buffer, bufferSize, flags);
     if (changed) {
@@ -30,20 +26,7 @@ GpuMonitorUI::GpuMonitorUI() {
 }
 
 std::string GpuMonitorUI::getSettingsPath() {
-    char* userProfile = nullptr;
-    size_t len = 0;
-    _dupenv_s(&userProfile, &len, "USERPROFILE");
-
-    // RAII wrapper ensures free() is called even if an exception occurs
-    std::unique_ptr<char, decltype(&free)> profileGuard(userProfile, free);
-
-    std::string path;
-    if (userProfile) {
-        path = std::format("{}\\.gpu_monitor", userProfile);
-    } else {
-        path = ".";
-    }
-    return path + "\\presets.json";
+    return Platform::getSettingsDirectory() + "/presets.json";
 }
 
 void GpuMonitorUI::loadSettings() {
@@ -179,21 +162,7 @@ void GpuMonitorUI::saveSettings() {
 }
 
 void GpuMonitorUI::copyToClipboard(const std::string& text) {
-    if (!OpenClipboard(nullptr)) return;
-
-    EmptyClipboard();
-
-    HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1);
-    if (hGlob) {
-        char* pGlob = static_cast<char*>(GlobalLock(hGlob));
-        if (pGlob) {
-            memcpy(pGlob, text.c_str(), text.size() + 1);
-            GlobalUnlock(hGlob);
-            SetClipboardData(CF_TEXT, hGlob);
-        }
-    }
-
-    CloseClipboard();
+    Platform::copyToClipboard(text);
 }
 
 void GpuMonitorUI::showCopiedToast(const std::string& label) {
@@ -387,27 +356,13 @@ std::string GpuMonitorUI::buildNvlinkPair(const std::vector<GpuStats>& allStats)
 }
 
 void GpuMonitorUI::openTerminalWithGpu(const std::string& cudaDevices, const std::string& label) {
-    // Build PowerShell command that sets env var and shows a message
-    std::string psCommand =
-        "$env:CUDA_VISIBLE_DEVICES='" + cudaDevices + "'; "
-        "Write-Host ''; "
-        "Write-Host '  CUDA_VISIBLE_DEVICES = " + cudaDevices + "  (" + label + ")' -ForegroundColor Green; "
-        "Write-Host ''";
-
-    // Launch PowerShell with -NoExit to keep it open
-    std::string args = "-NoExit -Command \"" + psCommand + "\"";
-
-    ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-
+    Platform::openTerminalWithEnv("CUDA_VISIBLE_DEVICES", cudaDevices, label);
     showCopiedToast("Terminal opened");
 }
 
 
 void GpuMonitorUI::killProcess(unsigned int pid) {
-    HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
-    if (hProcess != nullptr) {
-        TerminateProcess(hProcess, 1);
-        CloseHandle(hProcess);
+    if (Platform::killProcess(pid)) {
         showCopiedToast("Process killed");
     }
 }
@@ -508,19 +463,8 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
             if (ImGui::Button(!preset.name.empty() ? preset.name.c_str() : "Unnamed")) {
                 // Launch the preset
                 std::string gpuSel = buildGpuSelectionString(preset, gpuStats);
-
-                std::string psCommand;
-                if (!gpuSel.empty()) {
-                    psCommand = "$env:CUDA_VISIBLE_DEVICES='" + gpuSel + "'; ";
-                    psCommand += "Write-Host 'CUDA_VISIBLE_DEVICES = " + gpuSel + "' -ForegroundColor Green; ";
-                }
-                if (!preset.command.empty()) {
-                    psCommand += preset.command;
-                }
-
-                std::string args = "-NoExit -Command \"" + psCommand + "\"";
-                const char* workDir = !preset.workingDir.empty() ? preset.workingDir.c_str() : nullptr;
-                ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
+                Platform::executeCommand(preset.command, preset.workingDir,
+                                         gpuSel.empty() ? "" : "CUDA_VISIBLE_DEVICES", gpuSel);
                 showCopiedToast("Launched");
             }
             ImGui::SameLine();
@@ -568,17 +512,9 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 InputTextString("Working Dir", preset.workingDir);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("...")) {
-                    // Browse for folder
-                    BROWSEINFOA bi = {};
-                    bi.lpszTitle = "Select Working Directory";
-                    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-                    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
-                    if (pidl != nullptr) {
-                        char path[MAX_PATH];
-                        if (SHGetPathFromIDListA(pidl, path)) {
-                            preset.workingDir = path;
-                        }
-                        CoTaskMemFree(pidl);
+                    std::string folder = Platform::browseForFolder("Select Working Directory");
+                    if (!folder.empty()) {
+                        preset.workingDir = folder;
                     }
                 }
 
