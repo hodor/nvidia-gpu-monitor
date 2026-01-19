@@ -2,9 +2,10 @@
 #include "platform/platform.h"
 #include <nvml.h>
 #include <algorithm>
-#include <ranges>
 #include <chrono>
+#include <cstring>
 #include <format>
+#include <ranges>
 
 GpuMonitor::GpuMonitor() = default;
 

@@ -266,8 +266,8 @@ void GpuMonitorUI::renderDragHandle(const GpuStats& stats, const std::string& di
 
 void GpuMonitorUI::renderDropIndicator(int targetIndex) {
     if (!m_dragState.isDragging) return;
-    if (m_dragState.currentHoverIndex < 0) return;
-    if (m_dragState.currentHoverIndex == m_dragState.dragSourceIndex) return;
+    if (targetIndex < 0) return;
+    if (targetIndex == m_dragState.dragSourceIndex) return;
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     ImVec2 windowPos = ImGui::GetWindowPos();
@@ -277,17 +277,16 @@ void GpuMonitorUI::renderDropIndicator(int targetIndex) {
     // If moving DOWN (source < target): show line at BOTTOM of target card
     // If moving UP (source > target): show line at TOP of target card
     float indicatorY = 0.0f;
-    int hoverIdx = m_dragState.currentHoverIndex;
 
-    if (m_dragState.dragSourceIndex < hoverIdx) {
+    if (m_dragState.dragSourceIndex < targetIndex) {
         // Moving down - show at bottom of target card
-        if (hoverIdx < static_cast<int>(m_dragState.cardEndY.size())) {
-            indicatorY = m_dragState.cardEndY[hoverIdx];
+        if (targetIndex < static_cast<int>(m_dragState.cardEndY.size())) {
+            indicatorY = m_dragState.cardEndY[targetIndex];
         }
     } else {
         // Moving up - show at top of target card
-        if (hoverIdx < static_cast<int>(m_dragState.cardStartY.size())) {
-            indicatorY = m_dragState.cardStartY[hoverIdx];
+        if (targetIndex < static_cast<int>(m_dragState.cardStartY.size())) {
+            indicatorY = m_dragState.cardStartY[targetIndex];
         }
     }
 
