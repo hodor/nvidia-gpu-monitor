@@ -17,7 +17,15 @@ if(CUDAToolkit_FOUND)
     if(WIN32)
         set(NVML_LIBRARY "${CUDAToolkit_LIBRARY_DIR}/nvml.lib")
     else()
-        set(NVML_LIBRARY "nvidia-ml")
+        # Linux: prefer stub library for linking (works on CI without GPU)
+        find_library(NVML_LIBRARY
+            NAMES nvidia-ml
+            PATHS "${CUDAToolkit_LIBRARY_DIR}/stubs" "${CUDAToolkit_LIBRARY_DIR}"
+            NO_DEFAULT_PATH
+        )
+        if(NOT NVML_LIBRARY)
+            set(NVML_LIBRARY "nvidia-ml")  # Fall back to system
+        endif()
     endif()
 else()
     if(WIN32)
@@ -33,9 +41,15 @@ else()
             message(FATAL_ERROR "CUDA Toolkit not found. Install CUDA or set CUDAToolkit_ROOT.")
         endif()
     else()
-        # Linux fallback - NVML is typically in standard paths
+        # Linux fallback - search standard paths
         find_path(NVML_INCLUDE_DIR nvml.h PATHS /usr/include /usr/local/cuda/include)
-        set(NVML_LIBRARY "nvidia-ml")
+        find_library(NVML_LIBRARY
+            NAMES nvidia-ml
+            PATHS /usr/local/cuda/lib64/stubs /usr/local/cuda/lib64 /usr/lib64 /usr/lib
+        )
+        if(NOT NVML_LIBRARY)
+            set(NVML_LIBRARY "nvidia-ml")  # Fall back to system
+        endif()
         if(NOT NVML_INCLUDE_DIR)
             message(FATAL_ERROR "CUDA/NVML headers not found. Install CUDA Toolkit or nvidia-driver packages.")
         endif()

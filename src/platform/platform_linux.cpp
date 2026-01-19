@@ -58,7 +58,7 @@ void openTerminalWithEnv(const std::string& envName, const std::string& envValue
 
     // Fall back to xterm
     cmd = "xterm -e bash -c \"" + shellCmd + "\" 2>/dev/null &";
-    system(cmd.c_str());
+    (void)system(cmd.c_str());
 }
 
 void executeCommand(const std::string& cmd, const std::string& workingDir,
@@ -73,7 +73,7 @@ void executeCommand(const std::string& cmd, const std::string& workingDir,
     }
     fullCmd += cmd + " &";
 
-    system(fullCmd.c_str());
+    (void)system(fullCmd.c_str());
 }
 
 bool killProcess(unsigned int pid) {
