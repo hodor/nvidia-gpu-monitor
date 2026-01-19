@@ -54,4 +54,6 @@ Makefile
 
 # debug information files
 *.dwo
-external/imgui
+# Settings files
+*.json
+!package.json

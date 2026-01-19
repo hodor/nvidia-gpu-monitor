@@ -273,17 +273,25 @@ void GpuMonitorUI::renderDropIndicator(int targetIndex) {
     ImVec2 windowPos = ImGui::GetWindowPos();
     float windowWidth = ImGui::GetWindowWidth();
 
-    // Calculate Y position for the drop indicator line
+    // Calculate Y position for the drop indicator line using actual card positions
     // If moving DOWN (source < target): show line at BOTTOM of target card
     // If moving UP (source > target): show line at TOP of target card
-    float indicatorY;
-    if (m_dragState.dragSourceIndex < m_dragState.currentHoverIndex) {
+    float indicatorY = 0.0f;
+    int hoverIdx = m_dragState.currentHoverIndex;
+
+    if (m_dragState.dragSourceIndex < hoverIdx) {
         // Moving down - show at bottom of target card
-        indicatorY = m_dragState.firstCardY + (m_dragState.currentHoverIndex + 1) * m_dragState.cardHeight;
+        if (hoverIdx < static_cast<int>(m_dragState.cardEndY.size())) {
+            indicatorY = m_dragState.cardEndY[hoverIdx];
+        }
     } else {
         // Moving up - show at top of target card
-        indicatorY = m_dragState.firstCardY + m_dragState.currentHoverIndex * m_dragState.cardHeight;
+        if (hoverIdx < static_cast<int>(m_dragState.cardStartY.size())) {
+            indicatorY = m_dragState.cardStartY[hoverIdx];
+        }
     }
+
+    if (indicatorY <= 0.0f) return;  // Invalid position
 
     // Draw horizontal blue line
     ImU32 lineColor = IM_COL32(80, 150, 255, 255);
@@ -367,28 +375,263 @@ void GpuMonitorUI::killProcess(unsigned int pid) {
     }
 }
 
-void GpuMonitorUI::renderSystemHealth(const SystemInfo& sysInfo) {
-    if (ImGui::CollapsingHeader("System Health")) {
-        ImGui::Indent(10);
+int GpuMonitorUI::getMetricHealth(float frac) {
+    // For Power/Core/Mem - high usage is often expected
+    if (frac > 0.90f) return 2;  // Red
+    if (frac > 0.70f) return 1;  // Yellow
+    return 0;                     // Green
+}
 
-        // Driver and CUDA version
-        ImGui::Text("Driver: %s", sysInfo.driverVersion.c_str());
-        ImGui::SameLine(200);
-        ImGui::Text("CUDA: %s", sysInfo.cudaVersion.c_str());
+int GpuMonitorUI::getVramHealth(float frac) {
+    // For VRAM/GPU - more conservative thresholds since running low causes issues
+    if (frac > 0.70f) return 2;  // Red
+    if (frac > 0.40f) return 1;  // Yellow
+    return 0;                     // Green
+}
 
-        // NVLink status
-        if (sysInfo.nvlinkAvailable) {
-            ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "NVLink: Connected");
-            for (const auto& pair : sysInfo.nvlinkPairs) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(GPU %d <-> GPU %d)", pair.first, pair.second);
+// 4-level health for temperature (0=green, 1=yellow, 2=orange, 3=red)
+int GpuMonitorUI::getTempHealth(unsigned int tempC) {
+    if (tempC > 80) return 3;  // Red - approaching throttle
+    if (tempC > 65) return 2;  // Orange - heavy load
+    if (tempC > 50) return 1;  // Yellow - normal load
+    return 0;                   // Green - cool/idle
+}
+
+// 4-level health for fan speed (0=green, 1=yellow, 2=orange, 3=red)
+int GpuMonitorUI::getFanHealth(unsigned int fanPercent) {
+    if (fanPercent > 80) return 3;  // Red - max cooling
+    if (fanPercent > 60) return 2;  // Orange - working hard
+    if (fanPercent > 40) return 1;  // Yellow - moderate
+    return 0;                        // Green - quiet/idle
+}
+
+// Get color for 4-level health indicator
+ImVec4 GpuMonitorUI::getHealthColor4(int health) {
+    switch (health) {
+        case 0: return ImVec4(0.3f, 0.85f, 0.3f, 1.0f);   // Green
+        case 1: return ImVec4(0.95f, 0.85f, 0.2f, 1.0f);  // Yellow
+        case 2: return ImVec4(0.95f, 0.55f, 0.2f, 1.0f);  // Orange
+        case 3: return ImVec4(0.95f, 0.3f, 0.3f, 1.0f);   // Red
+        default: return ImVec4(0.5f, 0.5f, 0.5f, 1.0f);   // Gray
+    }
+}
+
+void GpuMonitorUI::renderModalOverlay() {
+    // Overlay is now handled by BeginDisabled/EndDisabled on individual sections
+    // This keeps the active element (sparklines or cards being dragged) fully visible
+    // while greying out non-interactive sections
+}
+
+void GpuMonitorUI::renderCompactMetrics(const GpuStats& stats) {
+    // Calculate fractions
+    float powerFrac = stats.powerLimit > 0 ? static_cast<float>(stats.powerDraw) / stats.powerLimit : 0.0f;
+    float coreClockFrac = stats.gpuClockMax > 0 ? static_cast<float>(stats.gpuClock) / stats.gpuClockMax : 0.0f;
+    float memClockFrac = stats.memClockMax > 0 ? static_cast<float>(stats.memClock) / stats.memClockMax : 0.0f;
+
+    // Get history (already updated by renderGpuCard)
+    GpuMetricHistory& history = m_metricHistory[stats.uuid];
+
+    // Get display seconds (current or preview during drag)
+    int displaySecs = history.displaySeconds;
+    if (m_zoomState.isDragging && m_zoomState.dragGpuUuid == stats.uuid) {
+        displaySecs = m_zoomState.previewDisplaySeconds;
+    }
+
+    // Temporarily override for data retrieval
+    int savedDisplaySecs = history.displaySeconds;
+    history.displaySeconds = displaySecs;
+
+    // Get ordered history data for each metric
+    float powerData[GpuMetricHistory::HISTORY_SIZE];
+    float coreData[GpuMetricHistory::HISTORY_SIZE];
+    float memData[GpuMetricHistory::HISTORY_SIZE];
+    size_t dataCount = 0;
+    history.getOrderedMetric(history.powerHistory, powerData, dataCount);
+    history.getOrderedMetric(history.coreClockHistory, coreData, dataCount);
+    history.getOrderedMetric(history.memClockHistory, memData, dataCount);
+
+    history.displaySeconds = savedDisplaySecs;  // Restore
+
+    // Health colors
+    ImVec4 healthColors[] = {
+        ImVec4(0.3f, 0.85f, 0.3f, 1.0f),   // Green
+        ImVec4(0.95f, 0.75f, 0.2f, 1.0f),  // Yellow
+        ImVec4(0.95f, 0.3f, 0.3f, 1.0f)    // Red
+    };
+
+    // Sparkline colors based on value
+    auto getSparklineColor = [](float frac) -> ImU32 {
+        if (frac > 0.90f) return IM_COL32(240, 80, 80, 255);   // Red
+        if (frac > 0.70f) return IM_COL32(240, 190, 50, 255);  // Yellow
+        return IM_COL32(80, 200, 80, 255);                      // Green
+    };
+
+    // Calculate responsive dimensions - match full-width sparkline margins
+    float availableWidth = ImGui::GetContentRegionAvail().x;
+    float circleRadius = 5.0f;
+    float rightMargin = 12.0f;  // Same as full-width sparklines
+    float columnSpacing = 15.0f;
+    // Total usable width = availableWidth - rightMargin, split into 3 columns with 2 gaps
+    float columnWidth = (availableWidth - rightMargin - 2 * columnSpacing) / 3.0f;
+    float sparklineHeight = 35.0f;
+    float headerHeight = ImGui::GetTextLineHeight() + 4.0f;
+
+    // Check for sparkline interaction (only if not in card drag mode)
+    bool canInteract = !m_dragState.isDragging;
+    bool isThisGpuZooming = m_zoomState.isDragging && m_zoomState.dragGpuUuid == stats.uuid;
+
+    // Metric data for iteration
+    struct MetricInfo {
+        const char* label;
+        const char* valueStr;  // Pre-formatted value string
+        float frac;
+        const float* data;
+        const char* sparkId;
+    };
+
+    std::string powerSparkId = "##spark_power_" + stats.uuid;
+    std::string coreSparkId = "##spark_core_" + stats.uuid;
+    std::string memSparkId = "##spark_mem_" + stats.uuid;
+
+    // Pre-format value strings
+    std::string powerValueStr = std::format("{}/{}W", stats.powerDraw, stats.powerLimit);
+    std::string coreValueStr = std::format("{}/{}MHz", stats.gpuClock, stats.gpuClockMax);
+    std::string memValueStr = std::format("{}/{}MHz", stats.memClock, stats.memClockMax);
+
+    MetricInfo metrics[] = {
+        {"Power", powerValueStr.c_str(), powerFrac, powerData, powerSparkId.c_str()},
+        {"Core", coreValueStr.c_str(), coreClockFrac, coreData, coreSparkId.c_str()},
+        {"Mem", memValueStr.c_str(), memClockFrac, memData, memSparkId.c_str()}
+    };
+
+    bool anyHovered = false;
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    float leftOffset = circleRadius * 2 + 8;  // Circle + padding, same as full-width
+
+    for (int col = 0; col < 3; col++) {
+        const auto& m = metrics[col];
+        float colX = startPos.x + col * (columnWidth + columnSpacing);
+        float sparklineWidth = columnWidth - leftOffset;  // Sparkline fills rest of column
+
+        // Health indicator circle (top-left, aligned with top of sparkline)
+        int health = getMetricHealth(m.frac);
+        ImVec2 circleCenter(colX + circleRadius + 2, startPos.y + headerHeight + circleRadius + 2);
+        drawList->AddCircleFilled(circleCenter, circleRadius,
+            ImGui::ColorConvertFloat4ToU32(healthColors[health]));
+
+        // Sparkline position (after circle)
+        float sparkX = colX + leftOffset;
+        float sparkY = startPos.y + headerHeight;
+        ImVec2 sparkPos(sparkX, sparkY);
+        ImVec2 sparkSize(sparklineWidth, sparklineHeight);
+
+        // Label (top-left, above sparkline)
+        drawList->AddText(ImVec2(sparkX, startPos.y), IM_COL32(180, 180, 180, 255), m.label);
+
+        // Value (top-right, above sparkline)
+        ImVec2 valueSize = ImGui::CalcTextSize(m.valueStr);
+        drawList->AddText(
+            ImVec2(sparkX + sparklineWidth - valueSize.x, startPos.y),
+            ImGui::ColorConvertFloat4ToU32(healthColors[health]),
+            m.valueStr
+        );
+
+        // Sparkline background
+        drawList->AddRectFilled(sparkPos,
+            ImVec2(sparkPos.x + sparkSize.x, sparkPos.y + sparkSize.y),
+            IM_COL32(20, 20, 25, 255));
+
+        // Draw sparkline data
+        if (dataCount > 1) {
+            ImU32 lineColor = getSparklineColor(m.frac);
+            float xStep = sparkSize.x / (dataCount - 1);
+
+            for (size_t i = 1; i < dataCount; i++) {
+                float x1 = sparkPos.x + (i - 1) * xStep;
+                float x2 = sparkPos.x + i * xStep;
+                float y1 = sparkPos.y + sparkSize.y - (m.data[i - 1] * sparkSize.y * 0.85f) - 3;
+                float y2 = sparkPos.y + sparkSize.y - (m.data[i] * sparkSize.y * 0.85f) - 3;
+                drawList->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), lineColor, 1.5f);
             }
-        } else {
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "NVLink: Not connected");
         }
 
-        ImGui::Unindent(10);
-        ImGui::Spacing();
+        // Sparkline border
+        ImU32 borderColor = isThisGpuZooming ? IM_COL32(100, 150, 255, 255) : IM_COL32(50, 50, 55, 255);
+        drawList->AddRect(sparkPos,
+            ImVec2(sparkPos.x + sparkSize.x, sparkPos.y + sparkSize.y), borderColor);
+
+        // Invisible button for interaction
+        ImGui::SetCursorScreenPos(sparkPos);
+        ImGui::InvisibleButton(m.sparkId, sparkSize);
+
+        bool thisHovered = ImGui::IsItemHovered();
+        if (thisHovered) {
+            anyHovered = true;
+
+            // Time label only shown on hover (vertically centered, right-aligned)
+            std::string timeLabel = std::format("{}s", displaySecs);
+            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel.c_str());
+            drawList->AddText(
+                ImVec2(sparkPos.x + sparkSize.x - timeLabelSize.x - 4,
+                       sparkPos.y + (sparkSize.y - timeLabelSize.y) / 2),
+                IM_COL32(120, 120, 130, 255), timeLabel.c_str()
+            );
+        }
+    }
+
+    // Move cursor past our custom drawing
+    ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + headerHeight + sparklineHeight + 8));
+
+    // Handle zoom drag interaction (initiation only - ongoing drag is handled in renderGpuCard)
+    if (canInteract) {
+        // Start drag on any sparkline
+        if (anyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            m_zoomState.isDragging = true;
+            m_zoomState.dragGpuUuid = stats.uuid;
+            m_zoomState.dragStartX = ImGui::GetMousePos().x;
+            m_zoomState.originalDisplaySeconds = history.displaySeconds;
+            m_zoomState.previewDisplaySeconds = history.displaySeconds;
+        }
+
+        // Right-click to reset zoom
+        if (anyHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            history.resetZoom();
+        }
+
+        // Simple tooltip when hovering (not dragging)
+        if (anyHovered && !m_zoomState.isDragging) {
+            ImGui::SetTooltip("Drag to time-dilate | Right-click to reset");
+        }
+    }
+}
+
+void GpuMonitorUI::renderSystemHealth(const SystemInfo& sysInfo) {
+    // Disable interaction during modal states
+    if (isModalActive()) {
+        ImGui::BeginDisabled();
+    }
+
+    // Show system info inline (no collapsible header)
+    ImGui::TextDisabled("Driver %s", sysInfo.driverVersion.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("| CUDA %s", sysInfo.cudaVersion.c_str());
+
+    // NVLink status (only show if connected)
+    if (sysInfo.nvlinkAvailable) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.3f, 0.85f, 0.3f, 1.0f), "| NVLink");
+        for (const auto& pair : sysInfo.nvlinkPairs) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d<->%d)", pair.first, pair.second);
+        }
+    }
+
+    ImGui::Spacing();
+
+    if (isModalActive()) {
+        ImGui::EndDisabled();
     }
 }
 
@@ -436,6 +679,11 @@ void GpuMonitorUI::toggleGpuInPreset(QuickLaunchPreset& preset, const std::strin
 }
 
 void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
+    // Disable interaction during modal states
+    if (isModalActive()) {
+        ImGui::BeginDisabled();
+    }
+
     if (ImGui::CollapsingHeader("Quick Launch", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::Indent(10);
 
@@ -549,6 +797,10 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
         ImGui::Unindent(10);
         ImGui::Spacing();
     }
+
+    if (isModalActive()) {
+        ImGui::EndDisabled();
+    }
 }
 
 void GpuMonitorUI::renderProcessesSection(const GpuStats& stats) {
@@ -654,6 +906,11 @@ void GpuMonitorUI::render(const std::vector<GpuStats>& gpuStats, const SystemInf
     } else {
         // Sort GPUs by user-defined order
         auto sortedStats = sortGpusByUserOrder(gpuStats);
+
+        // Initialize per-card position tracking
+        m_dragState.cardStartY.resize(sortedStats.size());
+        m_dragState.cardEndY.resize(sortedStats.size());
+
         for (size_t i = 0; i < sortedStats.size(); i++) {
             renderGpuCard(sortedStats[i], gpuStats, static_cast<int>(i));
         }
@@ -679,6 +936,9 @@ void GpuMonitorUI::render(const std::vector<GpuStats>& gpuStats, const SystemInf
 
     // Confirmation dialog
     renderConfirmDialog();
+
+    // Modal overlay (drawn on foreground, so after all other content)
+    renderModalOverlay();
 
     ImGui::End();
 }
@@ -754,33 +1014,42 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     // Store card start position
     ImVec2 cardStartPos = ImGui::GetCursorScreenPos();
     float cardWidth = ImGui::GetContentRegionAvail().x;
-    if (index == 0) {
-        m_dragState.firstCardY = cardStartPos.y;
+
+    // Store this card's start Y position
+    if (index < static_cast<int>(m_dragState.cardStartY.size())) {
+        m_dragState.cardStartY[index] = cardStartPos.y;
     }
 
-    // Check if this card is being hovered during drag (using mouse position)
+    // Check if this card is being hovered during drag (using actual card bounds from previous frame)
     bool isHoveredDuringDrag = false;
     if (isDragging && !isBeingDragged) {
         ImVec2 mousePos = ImGui::GetMousePos();
-        float estimatedCardHeight = m_dragState.cardHeight > 0 ? m_dragState.cardHeight : 200.0f;
+
+        // Use actual card end position from previous frame if available
+        float cardEndY = cardStartPos.y + 200.0f;  // Default fallback
+        if (index < static_cast<int>(m_dragState.cardEndY.size()) && m_dragState.cardEndY[index] > 0) {
+            cardEndY = m_dragState.cardEndY[index];
+        }
 
         if (mousePos.x >= cardStartPos.x && mousePos.x <= cardStartPos.x + cardWidth &&
-            mousePos.y >= cardStartPos.y && mousePos.y <= cardStartPos.y + estimatedCardHeight) {
+            mousePos.y >= cardStartPos.y && mousePos.y <= cardEndY) {
             isHoveredDuringDrag = true;
             m_dragState.currentHoverIndex = index;
         }
     }
 
-    // Draw highlight background if hovered during drag (no border, just fill)
+    // Draw highlight background if hovered during drag (use actual bounds)
     if (isHoveredDuringDrag) {
         ImDrawList* drawList = ImGui::GetWindowDrawList();
-        float estimatedCardHeight = m_dragState.cardHeight > 0 ? m_dragState.cardHeight : 200.0f;
+        float cardEndY = cardStartPos.y + 200.0f;
+        if (index < static_cast<int>(m_dragState.cardEndY.size()) && m_dragState.cardEndY[index] > 0) {
+            cardEndY = m_dragState.cardEndY[index];
+        }
 
-        // Blue glow/highlight effect only
         ImU32 highlightColor = IM_COL32(80, 150, 255, 50);
         drawList->AddRectFilled(
             cardStartPos,
-            ImVec2(cardStartPos.x + cardWidth, cardStartPos.y + estimatedCardHeight),
+            ImVec2(cardStartPos.x + cardWidth, cardEndY),
             highlightColor
         );
     }
@@ -851,77 +1120,430 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     ImGui::SameLine();
     ImGui::TextDisabled("cuda:%u", stats.cudaIndex);
 
+    // Collapse/Expand button (right-aligned)
+    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
+    std::string collapseId = "##collapse_" + stats.uuid;
+    if (ImGui::SmallButton(cardState.collapsed ? "+" : "-")) {
+        cardState.collapsed = !cardState.collapsed;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::BeginTooltip();
+        ImGui::TextUnformatted(cardState.collapsed ? "Expand" : "Collapse");
+        ImGui::EndTooltip();
+    }
+
+    // Calculate basic fractions (needed even when collapsed for history tracking)
+    float vramUsedGB = static_cast<float>(stats.vramUsed) / (1024.0f * 1024.0f * 1024.0f);
+    float vramTotalGB = static_cast<float>(stats.vramTotal) / (1024.0f * 1024.0f * 1024.0f);
+    float vramFrac = vramTotalGB > 0 ? vramUsedGB / vramTotalGB : 0.0f;
+    float gpuUtilFrac = stats.gpuUtilization / 100.0f;
+    float powerFrac = stats.powerLimit > 0 ? static_cast<float>(stats.powerDraw) / stats.powerLimit : 0.0f;
+    float coreClockFrac = stats.gpuClockMax > 0 ? static_cast<float>(stats.gpuClock) / stats.gpuClockMax : 0.0f;
+    float memClockFrac = stats.memClockMax > 0 ? static_cast<float>(stats.memClock) / stats.memClockMax : 0.0f;
+    float tempFrac = stats.temperature / 100.0f;
+    float fanFrac = stats.fanSpeed / 100.0f;
+
+    // Always track history even when collapsed
+    GpuMetricHistory& history = m_metricHistory[stats.uuid];
+    float deltaTime = ImGui::GetIO().DeltaTime;
+    history.addSample(deltaTime, vramFrac, gpuUtilFrac, powerFrac, coreClockFrac, memClockFrac, tempFrac, fanFrac);
+
+    // Collapsed view: compact visual indicators in a single row
+    if (cardState.collapsed) {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        float rowHeight = 16.0f;
+        float curX = startPos.x;
+        float barWidth = 50.0f;
+        float barHeight = 8.0f;
+        float barY = startPos.y + 4.0f;
+
+        // VRAM mini bar with 4-color health
+        int vramHealth = getVramHealth(vramFrac);
+        ImU32 vramColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(vramHealth));
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "V");
+        curX += 12.0f;
+        drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(30, 30, 35, 255), 2.0f);
+        if (vramFrac > 0.01f) {
+            drawList->AddRectFilled(ImVec2(curX, barY),
+                ImVec2(curX + barWidth * vramFrac, barY + barHeight), vramColor, 2.0f);
+        }
+        drawList->AddRect(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(50, 50, 55, 255), 2.0f);
+        curX += barWidth + 3.0f;
+        std::string vramStr = std::format("{}%", static_cast<int>(vramFrac * 100.0f + 0.5f));
+        drawList->AddText(ImVec2(curX, startPos.y), vramColor, vramStr.c_str());
+        curX += ImGui::CalcTextSize(vramStr.c_str()).x + 10.0f;
+
+        // GPU mini bar with 4-color health
+        int gpuHealth = getVramHealth(gpuUtilFrac);  // Same thresholds as VRAM
+        ImU32 gpuColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(gpuHealth));
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "G");
+        curX += 12.0f;
+        drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(30, 30, 35, 255), 2.0f);
+        if (gpuUtilFrac > 0.01f) {
+            drawList->AddRectFilled(ImVec2(curX, barY),
+                ImVec2(curX + barWidth * gpuUtilFrac, barY + barHeight), gpuColor, 2.0f);
+        }
+        drawList->AddRect(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(50, 50, 55, 255), 2.0f);
+        curX += barWidth + 3.0f;
+        std::string gpuStr = std::format("{}%", stats.gpuUtilization);
+        drawList->AddText(ImVec2(curX, startPos.y), gpuColor, gpuStr.c_str());
+        curX += ImGui::CalcTextSize(gpuStr.c_str()).x + 10.0f;
+
+        // Fan donut widget
+        int fanHealth = getFanHealth(stats.fanSpeed);
+        ImU32 fanColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(fanHealth));
+        float donutCenterX = curX + 6.0f;
+        float donutCenterY = startPos.y + rowHeight / 2.0f;
+        float donutRadius = 6.0f;
+        float donutThickness = 2.5f;
+        float fanFillFrac = stats.fanSpeed / 100.0f;
+
+        drawList->AddCircle(ImVec2(donutCenterX, donutCenterY), donutRadius,
+            IM_COL32(40, 40, 45, 255), 16, donutThickness);
+        if (fanFillFrac > 0.01f) {
+            float startAngle = -3.14159f / 2.0f;
+            float endAngle = startAngle + fanFillFrac * 2.0f * 3.14159f;
+            drawList->PathArcTo(ImVec2(donutCenterX, donutCenterY), donutRadius,
+                startAngle, endAngle, 16);
+            drawList->PathStroke(fanColor, 0, donutThickness);
+        }
+        curX += 16.0f;
+        std::string fanStr = std::format("{}%", stats.fanSpeed);
+        drawList->AddText(ImVec2(curX, startPos.y), fanColor, fanStr.c_str());
+        curX += ImGui::CalcTextSize(fanStr.c_str()).x + 10.0f;
+
+        // Temperature with 4-color health
+        int tempHealth = getTempHealth(stats.temperature);
+        ImU32 tempColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(tempHealth));
+        std::string tempStr = std::format("{}C", stats.temperature);
+        drawList->AddText(ImVec2(curX, startPos.y), tempColor, tempStr.c_str());
+        curX += ImGui::CalcTextSize(tempStr.c_str()).x + 10.0f;
+
+        // PCIe info (right side)
+        std::string pcieStr = std::format("Gen{} x{}", stats.pcieGen, stats.pcieWidth);
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(100, 100, 100, 255), pcieStr.c_str());
+
+        ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + rowHeight + 4.0f));
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // End group and return early
+        ImGui::EndGroup();
+        ImVec2 cardEndPos = ImGui::GetCursorScreenPos();
+
+        // Store this card's actual end Y position
+        if (index < static_cast<int>(m_dragState.cardEndY.size())) {
+            m_dragState.cardEndY[index] = cardEndPos.y;
+        }
+
+        if (isBeingDragged) {
+            ImGui::PopStyleVar();
+        }
+        ImGui::PopID();
+        return;
+    }
+
     ImGui::Separator();
     ImGui::Spacing();
 
-    // VRAM Usage
-    float vramUsedGB = static_cast<float>(stats.vramUsed) / (1024.0f * 1024.0f * 1024.0f);
-    float vramTotalGB = static_cast<float>(stats.vramTotal) / (1024.0f * 1024.0f * 1024.0f);
-    float vramFraction = vramTotalGB > 0 ? vramUsedGB / vramTotalGB : 0.0f;
+    int displaySecs = history.displaySeconds;
+    if (m_zoomState.isDragging && m_zoomState.dragGpuUuid == stats.uuid) {
+        displaySecs = m_zoomState.previewDisplaySeconds;
+    }
 
-    ImGui::Text("VRAM");
-    ImGui::SameLine(80);
-    ImGui::ProgressBar(vramFraction, ImVec2(-80, 0));
-    ImGui::SameLine();
-    ImGui::Text("%.1f/%.0fGB", vramUsedGB, vramTotalGB);
+    // Health colors (3-level for Power/Core/Mem)
+    ImVec4 healthColors[] = {
+        ImVec4(0.3f, 0.85f, 0.3f, 1.0f),   // Green
+        ImVec4(0.95f, 0.75f, 0.2f, 1.0f),  // Yellow
+        ImVec4(0.95f, 0.3f, 0.3f, 1.0f)    // Red
+    };
+
+    // Sparkline colors for Power/Core/Mem (70%/90% thresholds)
+    auto getSparklineColor = [](float frac) -> ImU32 {
+        if (frac > 0.90f) return IM_COL32(240, 80, 80, 255);
+        if (frac > 0.70f) return IM_COL32(240, 190, 50, 255);
+        return IM_COL32(80, 200, 80, 255);
+    };
+
+    // Sparkline colors for VRAM/GPU (40%/70% thresholds - matches getVramHealth)
+    auto getVramSparklineColor = [](float frac) -> ImU32 {
+        if (frac > 0.70f) return IM_COL32(240, 80, 80, 255);   // Red
+        if (frac > 0.40f) return IM_COL32(240, 190, 50, 255);  // Yellow
+        return IM_COL32(80, 200, 80, 255);                      // Green
+    };
+
+    // Get history data
+    float vramData[GpuMetricHistory::HISTORY_SIZE];
+    float gpuUtilData[GpuMetricHistory::HISTORY_SIZE];
+    size_t dataCount = 0;
+
+    int savedDisplaySecs = history.displaySeconds;
+    history.displaySeconds = displaySecs;
+    history.getOrderedMetric(history.vramHistory, vramData, dataCount);
+    history.getOrderedMetric(history.gpuUtilHistory, gpuUtilData, dataCount);
+    history.displaySeconds = savedDisplaySecs;
+
+    // Layout dimensions - must match compact metrics margins
+    float availableWidth = ImGui::GetContentRegionAvail().x;
+    float circleRadius = 5.0f;
+    float rightMargin = 12.0f;  // Consistent right margin with compact metrics
+    float sparklineHeight = 35.0f;
+    float leftOffset = circleRadius * 2 + 8;  // Circle + padding
+    float sparklineWidth = availableWidth - leftOffset - rightMargin;
+    float headerHeight = ImGui::GetTextLineHeight() + 4.0f;
+
+    bool canInteract = !m_dragState.isDragging;
+    bool isThisGpuZooming = m_zoomState.isDragging && m_zoomState.dragGpuUuid == stats.uuid;
+    bool anyVramGpuHovered = false;
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+    // Render full-width metric with sparkline
+    // useVramThresholds: true for VRAM/GPU (40%/70%), false for Power/Core/Mem (70%/90%)
+    auto renderFullWidthMetric = [&](const char* label, const char* valueStr, float frac,
+                                      const float* data, size_t count, const char* sparkId,
+                                      bool useVramThresholds = false) {
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        int health = useVramThresholds ? getVramHealth(frac) : getMetricHealth(frac);
+
+        // Health indicator circle (left side, vertically centered with sparkline)
+        ImVec2 circleCenter(startPos.x + circleRadius + 2,
+                           startPos.y + headerHeight + sparklineHeight / 2);
+        drawList->AddCircleFilled(circleCenter, circleRadius,
+            ImGui::ColorConvertFloat4ToU32(healthColors[health]));
+
+        // Sparkline area starts after circle
+        float sparkX = startPos.x + leftOffset;
+        float sparkY = startPos.y + headerHeight;
+        ImVec2 sparkPos(sparkX, sparkY);
+        ImVec2 sparkSize(sparklineWidth, sparklineHeight);
+
+        // Label (top-left, above sparkline)
+        drawList->AddText(ImVec2(sparkX, startPos.y), IM_COL32(180, 180, 180, 255), label);
+
+        // Value (top-right, above sparkline)
+        ImVec2 valueSize = ImGui::CalcTextSize(valueStr);
+        drawList->AddText(
+            ImVec2(sparkX + sparklineWidth - valueSize.x, startPos.y),
+            ImGui::ColorConvertFloat4ToU32(healthColors[health]),
+            valueStr
+        );
+
+        // Sparkline background
+        drawList->AddRectFilled(sparkPos,
+            ImVec2(sparkPos.x + sparkSize.x, sparkPos.y + sparkSize.y),
+            IM_COL32(20, 20, 25, 255));
+
+        // Draw sparkline data
+        if (count > 1) {
+            ImU32 lineColor = useVramThresholds ? getVramSparklineColor(frac) : getSparklineColor(frac);
+            float xStep = sparkSize.x / (count - 1);
+
+            for (size_t i = 1; i < count; i++) {
+                float x1 = sparkPos.x + (i - 1) * xStep;
+                float x2 = sparkPos.x + i * xStep;
+                float y1 = sparkPos.y + sparkSize.y - (data[i - 1] * sparkSize.y * 0.85f) - 3;
+                float y2 = sparkPos.y + sparkSize.y - (data[i] * sparkSize.y * 0.85f) - 3;
+                drawList->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), lineColor, 1.5f);
+            }
+        }
+
+        // Sparkline border
+        ImU32 borderColor = isThisGpuZooming ? IM_COL32(100, 150, 255, 255) : IM_COL32(50, 50, 55, 255);
+        drawList->AddRect(sparkPos, ImVec2(sparkPos.x + sparkSize.x, sparkPos.y + sparkSize.y), borderColor);
+
+        // Invisible button for interaction
+        ImGui::SetCursorScreenPos(sparkPos);
+        ImGui::InvisibleButton(sparkId, sparkSize);
+        bool hovered = ImGui::IsItemHovered();
+
+        // Time label only shown on hover (vertically centered, right-aligned)
+        if (hovered) {
+            std::string timeLabel = std::format("{}s", displaySecs);
+            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel.c_str());
+            drawList->AddText(
+                ImVec2(sparkPos.x + sparkSize.x - timeLabelSize.x - 4,
+                       sparkPos.y + (sparkSize.y - timeLabelSize.y) / 2),
+                IM_COL32(120, 120, 130, 255), timeLabel.c_str()
+            );
+        }
+
+        // Move cursor past this metric
+        ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + headerHeight + sparklineHeight + 6));
+
+        return hovered;
+    };
+
+    // VRAM - show used/total, percentage, and available
+    float vramAvailGB = vramTotalGB - vramUsedGB;
+    int vramPercent = static_cast<int>(vramFrac * 100.0f + 0.5f);
+    std::string vramValueStr = std::format("{:.1f}/{:.0f}GB ({}%) | {:.1f}GB free",
+                                           vramUsedGB, vramTotalGB, vramPercent, vramAvailGB);
+    std::string vramSparkId = "##spark_vram_" + stats.uuid;
+    if (renderFullWidthMetric("VRAM", vramValueStr.c_str(), vramFrac,
+                               vramData, dataCount, vramSparkId.c_str(), true)) {
+        anyVramGpuHovered = true;
+    }
 
     // GPU Utilization
-    float gpuUtil = stats.gpuUtilization / 100.0f;
-    ImVec4 utilColor = gpuUtil > 0.8f
-        ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f)
-        : (gpuUtil > 0.5f ? ImVec4(0.9f, 0.7f, 0.2f, 1.0f) : ImVec4(0.3f, 0.8f, 0.3f, 1.0f));
+    std::string gpuValueStr = std::format("{}%", stats.gpuUtilization);
+    std::string gpuSparkId = "##spark_gpuutil_" + stats.uuid;
+    if (renderFullWidthMetric("GPU", gpuValueStr.c_str(), gpuUtilFrac,
+                               gpuUtilData, dataCount, gpuSparkId.c_str(), true)) {
+        anyVramGpuHovered = true;
+    }
 
-    ImGui::Text("GPU");
-    ImGui::SameLine(80);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, utilColor);
-    ImGui::ProgressBar(gpuUtil, ImVec2(-80, 0));
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::Text("%3u%%", stats.gpuUtilization);
+    // Handle zoom drag interaction for VRAM/GPU sparklines
+    if (canInteract) {
+        if (anyVramGpuHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            m_zoomState.isDragging = true;
+            m_zoomState.dragGpuUuid = stats.uuid;
+            m_zoomState.dragStartX = ImGui::GetMousePos().x;
+            m_zoomState.originalDisplaySeconds = history.displaySeconds;
+            m_zoomState.previewDisplaySeconds = history.displaySeconds;
+        }
 
-    // Power (as bar)
-    float powerFrac = stats.powerLimit > 0 ? static_cast<float>(stats.powerDraw) / stats.powerLimit : 0.0f;
-    ImVec4 powerColor = powerFrac > 0.9f
-        ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f)
-        : (powerFrac > 0.7f ? ImVec4(0.9f, 0.7f, 0.2f, 1.0f) : ImVec4(0.4f, 0.7f, 0.4f, 1.0f));
-    ImGui::Text("Power");
-    ImGui::SameLine(80);
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, powerColor);
-    ImGui::ProgressBar(powerFrac, ImVec2(-80, 0));
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::Text("%uW/%uW", stats.powerDraw, stats.powerLimit);
+        if (anyVramGpuHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            history.resetZoom();
+        }
 
-    // GPU Clock (as bar)
-    float gpuClockFrac = stats.gpuClockMax > 0 ? static_cast<float>(stats.gpuClock) / stats.gpuClockMax : 0.0f;
-    ImGui::Text("Core");
-    ImGui::SameLine(80);
-    ImGui::ProgressBar(gpuClockFrac, ImVec2(-80, 0));
-    ImGui::SameLine();
-    ImGui::Text("%u MHz", stats.gpuClock);
+        if (anyVramGpuHovered && !m_zoomState.isDragging) {
+            ImGui::SetTooltip("Drag to time-dilate | Right-click to reset");
+        }
+    }
 
-    // Mem Clock (as bar)
-    float memClockFrac = stats.memClockMax > 0 ? static_cast<float>(stats.memClock) / stats.memClockMax : 0.0f;
-    ImGui::Text("Memory");
-    ImGui::SameLine(80);
-    ImGui::ProgressBar(memClockFrac, ImVec2(-80, 0));
-    ImGui::SameLine();
-    ImGui::Text("%u MHz", stats.memClock);
+    // Handle ongoing zoom drag
+    if (m_zoomState.isDragging && m_zoomState.dragGpuUuid == stats.uuid) {
+        float deltaX = ImGui::GetMousePos().x - m_zoomState.dragStartX;
+        int deltaSecs = static_cast<int>(deltaX / 2.0f);
+        int newSecs = m_zoomState.originalDisplaySeconds + deltaSecs;
+        newSecs = std::clamp(newSecs, GpuMetricHistory::MIN_DISPLAY_SECONDS,
+            GpuMetricHistory::MAX_DISPLAY_SECONDS);
+
+        bool shiftHeld = ImGui::GetIO().KeyShift;
+        if (shiftHeld) {
+            newSecs = ((newSecs + 2) / 5) * 5;
+            newSecs = std::clamp(newSecs, GpuMetricHistory::MIN_DISPLAY_SECONDS,
+                GpuMetricHistory::MAX_DISPLAY_SECONDS);
+        }
+
+        m_zoomState.previewDisplaySeconds = newSecs;
+
+        ImGui::BeginTooltip();
+        ImGui::Text("Time range: %ds", newSecs);
+        if (shiftHeld) {
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "(snap to 5s)");
+        }
+        if (newSecs == GpuMetricHistory::MIN_DISPLAY_SECONDS) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(minimum)");
+        } else if (newSecs == GpuMetricHistory::MAX_DISPLAY_SECONDS) {
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(maximum)");
+        }
+        ImGui::EndTooltip();
+
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            history.displaySeconds = m_zoomState.previewDisplaySeconds;
+            m_zoomState.isDragging = false;
+            m_zoomState.dragGpuUuid.clear();
+        }
+    }
+
+    // Compact metrics with sparklines (Power, Core, Memory)
+    renderCompactMetrics(stats);
 
     ImGui::Spacing();
 
-    // Temperature, Fan, and PCIe (text info at bottom)
-    ImVec4 tempColor = stats.temperature > 80
-        ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f)
-        : (stats.temperature > 65 ? ImVec4(0.9f, 0.7f, 0.2f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f));
+    // Temperature, Fan (left) | PCIe, Bus (right-aligned)
+    {
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        float rowHeight = 20.0f;
+        float availWidth = ImGui::GetContentRegionAvail().x;
+        float curX = startPos.x;
 
-    ImGui::TextColored(tempColor, "Temp: %uC", stats.temperature);
-    ImGui::SameLine(100);
-    ImGui::Text("Fan: %u%%", stats.fanSpeed);
-    ImGui::SameLine(200);
-    ImGui::Text("PCIe: Gen%u x%u", stats.pcieGen, stats.pcieWidth);
-    ImGui::SameLine();
-    ImGui::TextDisabled("| %s", stats.pciBusId.c_str());
+        // === LEFT SIDE: Temperature + Fan ===
+
+        // Temperature: Label + Bar + Value
+        int tempHealth = getTempHealth(stats.temperature);
+        ImVec4 tempColor = getHealthColor4(tempHealth);
+        ImU32 tempColorU32 = ImGui::ColorConvertFloat4ToU32(tempColor);
+
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(140, 140, 140, 255), "Temp");
+        curX += 30.0f;
+
+        float barY = startPos.y + 5.0f;
+        float barWidth = 40.0f;
+        float barHeight = 8.0f;
+        float tempFillFrac = std::clamp(stats.temperature / 100.0f, 0.0f, 1.0f);
+
+        drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(30, 30, 35, 255), 2.0f);
+        if (tempFillFrac > 0.01f) {
+            drawList->AddRectFilled(ImVec2(curX, barY),
+                ImVec2(curX + barWidth * tempFillFrac, barY + barHeight),
+                tempColorU32, 2.0f);
+        }
+        drawList->AddRect(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
+            IM_COL32(60, 60, 65, 255), 2.0f);
+        curX += barWidth + 3.0f;
+
+        std::string tempStr = std::format("{}C", stats.temperature);
+        drawList->AddText(ImVec2(curX, startPos.y), tempColorU32, tempStr.c_str());
+        curX += ImGui::CalcTextSize(tempStr.c_str()).x + 14.0f;
+
+        // Fan: Label + Donut + Value
+        int fanHealth = getFanHealth(stats.fanSpeed);
+        ImVec4 fanColor = getHealthColor4(fanHealth);
+        ImU32 fanColorU32 = ImGui::ColorConvertFloat4ToU32(fanColor);
+
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(140, 140, 140, 255), "Fan");
+        curX += 24.0f;
+
+        float donutCenterX = curX + 6.0f;
+        float donutCenterY = startPos.y + rowHeight / 2.0f;
+        float donutRadius = 6.0f;
+        float donutThickness = 2.5f;
+        float fanFillFrac = stats.fanSpeed / 100.0f;
+
+        drawList->AddCircle(ImVec2(donutCenterX, donutCenterY), donutRadius,
+            IM_COL32(40, 40, 45, 255), 20, donutThickness);
+        if (fanFillFrac > 0.01f) {
+            float startAngle = -3.14159f / 2.0f;
+            float endAngle = startAngle + fanFillFrac * 2.0f * 3.14159f;
+            drawList->PathArcTo(ImVec2(donutCenterX, donutCenterY), donutRadius,
+                startAngle, endAngle, 20);
+            drawList->PathStroke(fanColorU32, 0, donutThickness);
+        }
+        curX += 16.0f;
+
+        std::string fanStr = std::format("{}%", stats.fanSpeed);
+        drawList->AddText(ImVec2(curX, startPos.y), fanColorU32, fanStr.c_str());
+
+        // === RIGHT SIDE: PCIe + Bus (right-aligned) ===
+        std::string pcieStr = std::format("Gen{} x{}", stats.pcieGen, stats.pcieWidth);
+        ImVec2 pcieSize = ImGui::CalcTextSize(pcieStr.c_str());
+        ImVec2 busSize = ImGui::CalcTextSize(stats.pciBusId.c_str());
+
+        float rightMargin = 8.0f;
+        float gap = 10.0f;
+        float rightX = startPos.x + availWidth - rightMargin;
+
+        // Bus ID (rightmost, dimmed)
+        float busX = rightX - busSize.x;
+        drawList->AddText(ImVec2(busX, startPos.y), IM_COL32(90, 90, 90, 255), stats.pciBusId.c_str());
+
+        // PCIe (to the left of Bus)
+        float pcieX = busX - gap - pcieSize.x;
+        drawList->AddText(ImVec2(pcieX, startPos.y), IM_COL32(140, 140, 140, 255), pcieStr.c_str());
+
+        // Advance cursor
+        ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + rowHeight));
+    }
 
     ImGui::Spacing();
 
@@ -954,10 +1576,10 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     // End the card group
     ImGui::EndGroup();
 
-    // Calculate and store card height (after first card renders)
+    // Store this card's actual end Y position
     ImVec2 cardEndPos = ImGui::GetCursorScreenPos();
-    if (index == 0) {
-        m_dragState.cardHeight = cardEndPos.y - cardStartPos.y;
+    if (index < static_cast<int>(m_dragState.cardEndY.size())) {
+        m_dragState.cardEndY[index] = cardEndPos.y;
     }
 
     if (isBeingDragged) {

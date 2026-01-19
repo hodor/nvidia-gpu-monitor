@@ -1,10 +1,12 @@
 #pragma once
 
 #include "gpu_monitor.h"
+#include "imgui.h"
 #include <vector>
 #include <string>
 #include <map>
 #include <functional>
+#include <algorithm>
 
 // Confirmation dialog state
 struct ConfirmDialog {
@@ -43,14 +45,97 @@ struct GpuDragState {
     std::string draggedUuid;
     int dragSourceIndex = -1;
     int currentHoverIndex = -1;
-    float firstCardY = 0.0f;
-    float cardHeight = 0.0f;
+    // Per-card positions (cardEndY[i] = Y position at bottom of card i)
+    std::vector<float> cardStartY;
+    std::vector<float> cardEndY;
 };
 
 // Per-card UI state
 struct GpuCardState {
     bool settingsExpanded = false;
     bool focusNickname = false;  // Focus nickname input on next frame
+    bool collapsed = false;      // Minimize GPU card to single line
+};
+
+// History buffer for sparklines (circular buffer)
+struct GpuMetricHistory {
+    // At 60fps: 36000 samples = 600 seconds (10 minutes) of history
+    static constexpr size_t HISTORY_SIZE = 36000;
+    static constexpr int DEFAULT_DISPLAY_SECONDS = 60;
+    static constexpr int MIN_DISPLAY_SECONDS = 5;
+    static constexpr int MAX_DISPLAY_SECONDS = 600;
+
+    // All metrics as fractions (0-1)
+    float vramHistory[HISTORY_SIZE] = {};       // VRAM usage fraction
+    float gpuUtilHistory[HISTORY_SIZE] = {};    // GPU utilization fraction
+    float powerHistory[HISTORY_SIZE] = {};      // Power as fraction of limit
+    float coreClockHistory[HISTORY_SIZE] = {};  // Core clock as fraction of max
+    float memClockHistory[HISTORY_SIZE] = {};   // Mem clock as fraction of max
+    float tempHistory[HISTORY_SIZE] = {};       // Temperature as fraction (0-100C mapped to 0-1)
+    float fanHistory[HISTORY_SIZE] = {};        // Fan speed as fraction (0-100%)
+
+    size_t writeIndex = 0;
+    size_t sampleCount = 0;  // How many samples we've collected (up to HISTORY_SIZE)
+    int displaySeconds = DEFAULT_DISPLAY_SECONDS;  // How many seconds to show (zoom level)
+    float totalElapsedTime = 0.0f;  // Total time since first sample (for calculating sample rate)
+
+    // Add a sample every frame - tracks elapsed time to calculate actual sample rate
+    void addSample(float deltaTime, float vram, float gpuUtil, float power,
+                   float coreClock, float memClock, float temp, float fan) {
+        totalElapsedTime += deltaTime;
+
+        vramHistory[writeIndex] = vram;
+        gpuUtilHistory[writeIndex] = gpuUtil;
+        powerHistory[writeIndex] = power;
+        coreClockHistory[writeIndex] = coreClock;
+        memClockHistory[writeIndex] = memClock;
+        tempHistory[writeIndex] = temp;
+        fanHistory[writeIndex] = fan;
+        writeIndex = (writeIndex + 1) % HISTORY_SIZE;
+        if (sampleCount < HISTORY_SIZE) sampleCount++;
+    }
+
+    // Get effective samples per second based on actual timing
+    float getSamplesPerSecond() const {
+        if (totalElapsedTime < 0.1f || sampleCount < 2) return 60.0f;  // Default assumption
+        return static_cast<float>(sampleCount) / totalElapsedTime;
+    }
+
+    // Get ordered data for a single metric
+    // Uses actual sample rate to calculate how many samples represent displaySeconds
+    void getOrderedMetric(const float* source, float* out, size_t& outCount) const {
+        float sps = getSamplesPerSecond();
+        size_t samplesForTimeWindow = static_cast<size_t>(displaySeconds * sps);
+        // Cap to available samples
+        outCount = std::min({samplesForTimeWindow, sampleCount, HISTORY_SIZE});
+        if (outCount == 0) return;
+
+        size_t startIdx;
+        if (sampleCount <= outCount) {
+            startIdx = (sampleCount < HISTORY_SIZE) ? 0 : writeIndex;
+            outCount = sampleCount;  // Can only show what we have
+        } else {
+            startIdx = (writeIndex + HISTORY_SIZE - outCount) % HISTORY_SIZE;
+        }
+
+        for (size_t i = 0; i < outCount; i++) {
+            size_t idx = (startIdx + i) % HISTORY_SIZE;
+            out[i] = source[idx];
+        }
+    }
+
+    void resetZoom() {
+        displaySeconds = DEFAULT_DISPLAY_SECONDS;
+    }
+};
+
+// Sparkline zoom drag state
+struct SparklineZoomState {
+    bool isDragging = false;
+    std::string dragGpuUuid;      // Which GPU's sparklines are being adjusted
+    float dragStartX = 0.0f;      // Mouse X position at drag start
+    int originalDisplaySeconds = 0;  // Display seconds at drag start
+    int previewDisplaySeconds = 0;   // Preview value during drag
 };
 
 class GpuMonitorUI {
@@ -117,4 +202,30 @@ private:
 
     // Per-card UI state (keyed by UUID)
     std::map<std::string, GpuCardState> m_cardStates;
+
+    // Metric history for sparklines (keyed by UUID)
+    std::map<std::string, GpuMetricHistory> m_metricHistory;
+
+    // Sparkline zoom state
+    SparklineZoomState m_zoomState;
+
+    // Render compact metrics section with sparklines (grid layout)
+    void renderCompactMetrics(const GpuStats& stats);
+
+    // Get health status for a single metric: 0=green, 1=yellow, 2=red
+    int getMetricHealth(float frac);      // For Power/Core/Mem (70%/90% thresholds)
+    int getVramHealth(float frac);        // For VRAM/GPU (40%/70% thresholds)
+
+    // 4-level health indicators: 0=green, 1=yellow, 2=orange, 3=red
+    int getTempHealth(unsigned int tempC);
+    int getFanHealth(unsigned int fanPercent);
+    ImVec4 getHealthColor4(int health);
+
+    // Check if UI is in a modal state (should block other interactions)
+    bool isModalActive() const {
+        return m_dragState.isDragging || m_zoomState.isDragging;
+    }
+
+    // Render darkening overlay for modal states
+    void renderModalOverlay();
 };

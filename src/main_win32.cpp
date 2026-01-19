@@ -53,7 +53,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         _T("GPU Monitor"),
         WS_OVERLAPPEDWINDOW,
         100, 100,
-        450, 800,
+        520, 800,
         nullptr, nullptr,
         wc.hInstance,
         nullptr

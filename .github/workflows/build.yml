@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.16
@@ -35,11 +37,13 @@ jobs:
           path: build/Release/gpu_monitor.exe
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Dependencies
         run: |

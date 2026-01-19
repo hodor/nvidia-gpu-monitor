@@ -1,69 +1,97 @@
 # GPU Monitor
 
-A cross-platform desktop application for real-time NVIDIA GPU monitoring using NVML (NVIDIA Management Library).
+A lightweight, cross-platform desktop application for real-time NVIDIA GPU monitoring.
+
+![GPU Monitor Screenshot](img/screenshot.png)
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
 
 ## Features
 
-- **Real-time GPU Statistics**
-  - VRAM usage and utilization
-  - GPU and memory clock speeds
-  - Temperature and fan speed
-  - Power draw and limits
-  - PCIe generation and lane width
-  - ECC error counts (if supported)
+### Real-time Metrics with Sparklines
+- VRAM and GPU utilization with historical graphs
+- Power draw, core clock, and memory clock
+- Temperature and fan speed with color-coded health indicators
+- PCIe generation and lane width
+- ECC error counts (when supported)
 
-- **Multi-GPU Support**
-  - Monitor all NVIDIA GPUs simultaneously
-  - Drag-and-drop GPU card reordering
-  - Custom nicknames for each GPU
-  - TCC/WDDM driver mode detection
-  - NVLink connection status
+**Time-Dilate**: Drag on any sparkline to adjust the time window from 5 seconds to 10 minutes. See your GPU history at any scale.
 
-- **Process Management**
-  - View processes running on each GPU
-  - Process memory usage
-  - Kill processes directly from UI
+![Time-Dilate Feature](img/time_scale.gif)
 
-- **Quick Launch**
-  - Create presets with custom commands
-  - Select specific GPUs per preset
-  - Set `CUDA_VISIBLE_DEVICES` automatically
-  - Open terminals with GPU environment configured
+### Multi-GPU Support
+- Monitor all NVIDIA GPUs simultaneously
+- Drag-and-drop card reordering
+- Custom nicknames for each GPU (Ctrl+click to rename)
+- Collapse cards for a compact overview
+- TCC/WDDM driver mode detection
+- NVLink connection status
 
-- **Cross-Platform**
-  - Windows: DirectX 11 + Win32
-  - Linux: OpenGL 3 + GLFW
+### 4-Level Health Indicators
+Color-coded status for instant visibility:
+- **Green**: Normal operation
+- **Yellow**: Moderate load
+- **Orange**: Heavy load
+- **Red**: Approaching limits
 
-## Screenshots
+### Process Management
+- View all processes running on each GPU
+- Memory usage per process
+- Kill processes directly from the UI
 
-*Coming soon*
+### Quick Launch Presets
+- Create presets with custom commands
+- Select specific GPUs per preset
+- Automatically sets `CUDA_VISIBLE_DEVICES`
+- Open terminals with GPU environment pre-configured
+
+### GPU Commands
+- Copy Bus ID, CUDA index, or nvidia-smi commands
+- Open terminal with specific GPUs selected
+- Switch between TCC/WDDM modes (Windows, admin required)
+- Set power limits
+- Reset GPU
 
 ## Requirements
 
 - **NVIDIA GPU** with driver 450.0 or later
-- **CUDA Toolkit** (for NVML headers)
+- **CUDA Toolkit** (for NVML headers during build)
 - **Windows**: Visual Studio 2022, Windows SDK
 - **Linux**: GCC/Clang, GLFW3, OpenGL
 
-## Build Instructions
+## Configuration
+
+Settings are automatically saved to:
+- **Windows**: `%USERPROFILE%\.gpu_monitor\presets.json`
+- **Linux**: `$HOME/.config/gpu_monitor/presets.json`
+
+## Dependencies
+
+- [Dear ImGui](https://github.com/ocornut/imgui) (bundled as submodule)
+- [NVML](https://developer.nvidia.com/nvidia-management-library-nvml) (part of CUDA Toolkit)
+- DirectX 11 (Windows) / GLFW + OpenGL (Linux)
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## Building from Source
+
+### Clone with Submodules
+
+```bash
+git clone --recursive https://github.com/yourusername/gpu_monitor.git
+cd gpu_monitor
+```
 
 ### Windows
 
 ```powershell
-# Clone the repository
-git clone https://github.com/yourusername/gpu_monitor.git
-cd gpu_monitor
-
-# Generate build files
 cmake -B build -G "Visual Studio 17 2022" -A x64
-
-# Build release
 cmake --build build --config Release
-
-# Run
 .\build\Release\gpu_monitor.exe
 ```
 
@@ -73,74 +101,29 @@ cmake --build build --config Release
 # Install dependencies (Debian/Ubuntu)
 sudo apt install libglfw3-dev libgl1-mesa-dev
 
-# Clone the repository
-git clone https://github.com/yourusername/gpu_monitor.git
-cd gpu_monitor
-
-# Generate and build
-cmake -B build
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-
-# Run
 ./build/gpu_monitor
 ```
 
 ### Custom CUDA Path
 
-If CUDA is not auto-detected, specify the path manually:
+If CUDA is not auto-detected:
 
 ```bash
 cmake -B build -DCUDAToolkit_ROOT=/path/to/cuda
 ```
 
-## Usage
-
-Launch the application and it will automatically detect all NVIDIA GPUs. The UI displays:
-
-- **System Health**: Driver version, CUDA version, NVLink status
-- **GPU Cards**: One card per GPU with all statistics
-- **Quick Launch**: Configure and run presets with specific GPU selections
-
-### GPU Card Features
-
-- Click the drag handle to reorder GPUs
-- Expand settings to set a nickname
-- View running processes and their memory usage
-- Use command buttons to:
-  - Copy Bus ID to clipboard
-  - Open terminal with `CUDA_VISIBLE_DEVICES` set
-  - Switch between TCC/WDDM modes (Windows, requires admin)
-
-### Configuration
-
-Settings are stored in:
-- **Windows**: `%USERPROFILE%\.gpu_monitor\presets.json`
-- **Linux**: `$HOME/.config/gpu_monitor/presets.json`
-
 ## Architecture
 
 ```
 src/
-├── main_win32.cpp        # Windows entry point, DirectX 11 setup
-├── main_linux.cpp        # Linux entry point, GLFW/OpenGL setup
-├── gpu_monitor.h/cpp     # NVML wrapper, background polling thread
-├── ui.h/cpp              # Dear ImGui UI rendering
+├── main_win32.cpp        # Windows: DirectX 11 + Win32
+├── main_linux.cpp        # Linux: OpenGL 3 + GLFW
+├── gpu_monitor.h/cpp     # NVML wrapper, background polling
+├── ui.h/cpp              # Dear ImGui UI
 └── platform/
     ├── platform.h        # Cross-platform interface
     ├── platform_win32.cpp
     └── platform_linux.cpp
 ```
-
-## Dependencies
-
-- [Dear ImGui](https://github.com/ocornut/imgui) (bundled, docking branch)
-- [NVML](https://developer.nvidia.com/nvidia-management-library-nvml) (part of CUDA Toolkit)
-- DirectX 11 (Windows) / GLFW + OpenGL (Linux)
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

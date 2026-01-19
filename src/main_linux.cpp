@@ -24,7 +24,7 @@ int main(int /*argc*/, char** /*argv*/) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
 
     // Create window with graphics context
-    GLFWwindow* window = glfwCreateWindow(450, 800, "GPU Monitor", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(520, 800, "GPU Monitor", nullptr, nullptr);
     if (window == nullptr) {
         glfwTerminate();
         return 1;
