@@ -59,7 +59,8 @@ struct GpuCardState {
 
 // History buffer for sparklines (circular buffer)
 struct GpuMetricHistory {
-    // At 60fps: 36000 samples = 600 seconds (10 minutes) of history
+    // Buffer holds 36000 samples. At 60fps = 10 minutes; at 600fps = 1 minute
+    // Actual sample rate is auto-detected and used for time calculations
     static constexpr size_t HISTORY_SIZE = 36000;
     static constexpr int DEFAULT_DISPLAY_SECONDS = 60;
     static constexpr int MIN_DISPLAY_SECONDS = 5;
@@ -82,7 +83,12 @@ struct GpuMetricHistory {
     // Add a sample every frame - tracks elapsed time to calculate actual sample rate
     void addSample(float deltaTime, float vram, float gpuUtil, float power,
                    float coreClock, float memClock, float temp, float fan) {
-        totalElapsedTime += deltaTime;
+        // Only accumulate time while buffer is filling (not yet wrapped)
+        // Once full, the ratio sampleCount/totalElapsedTime is locked to actual rate
+        if (sampleCount < HISTORY_SIZE) {
+            totalElapsedTime += deltaTime;
+            sampleCount++;
+        }
 
         vramHistory[writeIndex] = vram;
         gpuUtilHistory[writeIndex] = gpuUtil;
@@ -92,7 +98,6 @@ struct GpuMetricHistory {
         tempHistory[writeIndex] = temp;
         fanHistory[writeIndex] = fan;
         writeIndex = (writeIndex + 1) % HISTORY_SIZE;
-        if (sampleCount < HISTORY_SIZE) sampleCount++;
     }
 
     // Get effective samples per second based on actual timing

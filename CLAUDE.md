@@ -118,6 +118,14 @@ When making changes to this project:
 - K&R brace style (opening brace on same line)
 - Naming: `PascalCase` for classes, `camelCase` for functions, `m_camelCase` for members
 
+### No Lazy Workarounds
+**IMPORTANT**: When facing build failures, compatibility issues, or any problem - find and fix the real cause. Don't settle for quick hacks that degrade the codebase.
+
+- Investigate the root cause before proposing solutions
+- Fix the environment/tooling if that's the actual problem
+- Maintain code quality standards - don't downgrade code to accommodate broken setups
+- If C++20 features don't work somewhere, fix the compiler/toolchain, don't rewrite to C++11
+
 ### Adding Features
 - **New GPU metrics**: Add to `GpuStats` struct, update `updateStats()` in `gpu_monitor.cpp`, render in `ui.cpp`
 - **New UI elements**: Add to `ui.cpp`, follow existing card/section patterns

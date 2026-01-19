@@ -53,9 +53,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install GCC 13 (C++20 <format> support)
+        run: |
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          sudo apt-get update
+          sudo apt-get install -y gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
       - name: Install Dependencies
         run: |
-          sudo apt-get update
           sudo apt-get install -y libglfw3-dev libgl1-mesa-dev
 
       - name: Install CUDA Toolkit
