@@ -107,3 +107,37 @@ To specify a custom CUDA path:
 ```bash
 cmake -B build -DCUDAToolkit_ROOT=/path/to/cuda
 ```
+
+## Contributing
+
+When making changes to this project:
+
+### Code Style
+- C++20 standard
+- 4-space indentation (no tabs)
+- K&R brace style (opening brace on same line)
+- Naming: `PascalCase` for classes, `camelCase` for functions, `m_camelCase` for members
+
+### Adding Features
+- **New GPU metrics**: Add to `GpuStats` struct, update `updateStats()` in `gpu_monitor.cpp`, render in `ui.cpp`
+- **New UI elements**: Add to `ui.cpp`, follow existing card/section patterns
+- **Platform code**: Implement in both `platform_win32.cpp` and `platform_linux.cpp`
+
+### Before Committing to Main
+1. **Update CHANGELOG.md** - Add your changes under `[Unreleased]` section using Keep a Changelog format:
+   - `Added` for new features
+   - `Changed` for changes in existing functionality
+   - `Fixed` for bug fixes
+   - `Removed` for removed features
+2. Verify the build works: `cmake -B build && cmake --build build`
+3. Test on at least one platform
+
+### Commit Messages
+Use clear, imperative-mood messages:
+```
+Add NVLink bandwidth monitoring
+Fix memory leak in GPU polling thread
+Update ImGui to latest docking branch
+```
+
+See `CONTRIBUTING.md` for full guidelines.

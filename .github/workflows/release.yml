@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.16
+        id: cuda-toolkit
+        with:
+          cuda: '12.4.0'
+          method: 'network'
+          sub-packages: '["nvml_dev", "visual_studio_integration"]'
+
+      - name: Configure CMake
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release
+
+      - name: Package
+        run: |
+          mkdir package
+          copy build\Release\gpu_monitor.exe package\
+          Compress-Archive -Path package\* -DestinationPath gpu_monitor-${{ github.ref_name }}-windows-x64.zip
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: gpu_monitor-${{ github.ref_name }}-windows-x64.zip
+
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglfw3-dev libgl1-mesa-dev
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.16
+        id: cuda-toolkit
+        with:
+          cuda: '12.4.0'
+          method: 'network'
+          linux-local-args: '["--toolkit"]'
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          mkdir package
+          cp build/gpu_monitor package/
+          tar -czvf gpu_monitor-${{ github.ref_name }}-linux-x64.tar.gz -C package .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-release
+          path: gpu_monitor-${{ github.ref_name }}-linux-x64.tar.gz
+
+  create-release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+
+      - name: Download Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            gpu_monitor-${{ github.ref_name }}-windows-x64.zip
+            gpu_monitor-${{ github.ref_name }}-linux-x64.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
