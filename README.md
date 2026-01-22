@@ -1,13 +1,13 @@
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
+![Windows Build](https://github.com/hodor/nvidia-gpu-monitor/actions/workflows/build-windows.yml/badge.svg?branch=main)
+![Linux Build](https://github.com/hodor/nvidia-gpu-monitor/actions/workflows/build-linux.yml/badge.svg?branch=main)
+
 # GPU Monitor
 
 A lightweight, cross-platform desktop application for real-time NVIDIA GPU monitoring.
 
 ![GPU Monitor Screenshot](img/screenshot.png)
-
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
-![Windows Build](https://github.com/hodor/nvidia-gpu-monitor/actions/workflows/build.yml/badge.svg?branch=main&job=build-windows)
-![Linux Build](https://github.com/hodor/nvidia-gpu-monitor/actions/workflows/build.yml/badge.svg?branch=main&job=build-linux)
 
 ## Features
 
