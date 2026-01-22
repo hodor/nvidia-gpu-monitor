@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
@@ -16,10 +16,16 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Dependencies
+      - name: Install Clang 18 and Dependencies
         run: |
+          # Add LLVM repository
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" -y
           sudo apt-get update
-          sudo apt-get install -y clang libc++-dev libc++abi-dev libglfw3-dev libgl1-mesa-dev
+          # Remove any old libc++ that might conflict
+          sudo apt-get remove -y libc++-dev libc++abi-dev 2>/dev/null || true
+          # Install Clang 18 with its matching libc++
+          sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libglfw3-dev libgl1-mesa-dev
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.16
@@ -30,7 +36,10 @@ jobs:
           linux-local-args: '["--toolkit"]'
 
       - name: Configure CMake
-        run: CC=clang CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: |
+          CC=clang-18 CXX=clang++-18 cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-stdlib=libc++ -I/usr/lib/llvm-18/include/c++/v1" \
+            -DCMAKE_EXE_LINKER_FLAGS="-stdlib=libc++ -L/usr/lib/llvm-18/lib -Wl,-rpath,/usr/lib/llvm-18/lib"
 
       - name: Build
         run: cmake --build build -j$(nproc)
