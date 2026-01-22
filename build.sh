@@ -24,17 +24,17 @@ check_dependency() {
 check_dependency cmake
 check_dependency make
 
-# Prefer Clang, fall back to GCC
-if check_dependency clang && check_dependency clang++; then
-    export CC=clang
-    export CXX=clang++
-    echo -e "Compiler: ${YELLOW}Clang${NC}"
-elif check_dependency gcc && check_dependency g++; then
+# Prefer GCC for better C++20 support (jthread, stop_token)
+if check_dependency gcc && check_dependency g++; then
     export CC=gcc
     export CXX=g++
     echo -e "Compiler: ${YELLOW}GCC${NC}"
+elif check_dependency clang && check_dependency clang++; then
+    export CC=clang
+    export CXX=clang++
+    echo -e "Compiler: ${YELLOW}Clang${NC}"
 else
-    echo -e "${RED}Error: No C++ compiler found. Install clang or gcc.${NC}"
+    echo -e "${RED}Error: No C++ compiler found. Install gcc or clang.${NC}"
     exit 1
 fi
 

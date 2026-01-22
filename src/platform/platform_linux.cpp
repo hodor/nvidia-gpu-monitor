@@ -30,8 +30,8 @@ void copyToClipboard(const std::string& text) {
     }
 }
 
-void openTerminalWithEnv(const std::string& envName, const std::string& envValue,
-                         const std::string& label, const std::string& workingDir) {
+int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
+                        const std::string& label, const std::string& workingDir) {
     // Try common terminal emulators in order of preference
     std::string cmd;
     std::string cdCmd = workingDir.empty() ? "" : "cd '" + workingDir + "' && ";
@@ -46,23 +46,26 @@ void openTerminalWithEnv(const std::string& envName, const std::string& envValue
 
     // Try gnome-terminal first
     cmd = "gnome-terminal -- bash -c \"" + shellCmd + "\" 2>/dev/null";
-    if (system(cmd.c_str()) == 0) return;
+    int result = system(cmd.c_str());
+    if (result == 0) return 0;
 
     // Try konsole
     cmd = "konsole -e bash -c \"" + shellCmd + "\" 2>/dev/null";
-    if (system(cmd.c_str()) == 0) return;
+    result = system(cmd.c_str());
+    if (result == 0) return 0;
 
     // Try xfce4-terminal
     cmd = "xfce4-terminal -e \"bash -c \\\"" + shellCmd + "\\\"\" 2>/dev/null";
-    if (system(cmd.c_str()) == 0) return;
+    result = system(cmd.c_str());
+    if (result == 0) return 0;
 
     // Fall back to xterm
     cmd = "xterm -e bash -c \"" + shellCmd + "\" 2>/dev/null &";
-    (void)system(cmd.c_str());
+    return system(cmd.c_str());
 }
 
-void executeCommand(const std::string& cmd, const std::string& workingDir,
-                    const std::string& envName, const std::string& envValue) {
+int executeCommand(const std::string& cmd, const std::string& workingDir,
+                   const std::string& envName, const std::string& envValue) {
     std::string fullCmd;
 
     if (!workingDir.empty()) {
@@ -73,7 +76,7 @@ void executeCommand(const std::string& cmd, const std::string& workingDir,
     }
     fullCmd += cmd + " &";
 
-    (void)system(fullCmd.c_str());
+    return system(fullCmd.c_str());
 }
 
 bool killProcess(unsigned int pid) {

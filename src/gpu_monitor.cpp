@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
-#include <format>
 #include <ranges>
 #include <set>
 
@@ -258,7 +257,7 @@ void GpuMonitor::updateSystemInfo() {
     if (nvmlSystemGetCudaDriverVersion(&cudaVersion) == NVML_SUCCESS) {
         int major = cudaVersion / 1000;
         int minor = (cudaVersion % 1000) / 10;
-        info.cudaVersion = std::format("{}.{}", major, minor);
+        info.cudaVersion = std::to_string(major) + "." + std::to_string(minor);
     }
 
     // NVLink status - check connections between GPUs

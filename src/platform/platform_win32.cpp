@@ -43,8 +43,8 @@ void copyToClipboard(const std::string& text) {
     CloseClipboard();
 }
 
-void openTerminalWithEnv(const std::string& envName, const std::string& envValue,
-                         const std::string& label, const std::string& workingDir) {
+int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
+                        const std::string& label, const std::string& workingDir) {
     // Build PowerShell command that sets env var and shows a message
     std::string psCommand =
         "$env:" + envName + "='" + envValue + "'; "
@@ -56,11 +56,13 @@ void openTerminalWithEnv(const std::string& envName, const std::string& envValue
     std::string args = "-NoExit -Command \"" + psCommand + "\"";
 
     const char* workDir = workingDir.empty() ? nullptr : workingDir.c_str();
-    ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
+    HINSTANCE result = ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
+    // ShellExecuteA returns > 32 on success, <= 32 on error
+    return (reinterpret_cast<intptr_t>(result) > 32) ? 0 : static_cast<int>(reinterpret_cast<intptr_t>(result));
 }
 
-void executeCommand(const std::string& cmd, const std::string& workingDir,
-                    const std::string& envName, const std::string& envValue) {
+int executeCommand(const std::string& cmd, const std::string& workingDir,
+                   const std::string& envName, const std::string& envValue) {
     std::string psCommand;
     if (!envName.empty()) {
         psCommand = "$env:" + envName + "='" + envValue + "'; ";
@@ -69,7 +71,9 @@ void executeCommand(const std::string& cmd, const std::string& workingDir,
 
     std::string args = "-NoExit -Command \"" + psCommand + "\"";
     const char* workDir = workingDir.empty() ? nullptr : workingDir.c_str();
-    ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
+    HINSTANCE result = ShellExecuteA(nullptr, "open", "powershell.exe", args.c_str(), workDir, SW_SHOWNORMAL);
+    // ShellExecuteA returns > 32 on success, <= 32 on error
+    return (reinterpret_cast<intptr_t>(result) > 32) ? 0 : static_cast<int>(reinterpret_cast<intptr_t>(result));
 }
 
 bool killProcess(unsigned int pid) {

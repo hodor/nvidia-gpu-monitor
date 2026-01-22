@@ -18,12 +18,14 @@ void copyToClipboard(const std::string& text);
 // envValue: value to set
 // label: descriptive label shown to user
 // workingDir: optional working directory
-void openTerminalWithEnv(const std::string& envName, const std::string& envValue,
-                         const std::string& label, const std::string& workingDir = "");
+// Returns: 0 on success, -1 if process couldn't start, 127 if shell not found, or command exit code
+int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
+                        const std::string& label, const std::string& workingDir = "");
 
 // Execute a command with optional environment variable and working directory
-void executeCommand(const std::string& cmd, const std::string& workingDir = "",
-                    const std::string& envName = "", const std::string& envValue = "");
+// Returns: 0 on success, -1 if process couldn't start, 127 if shell not found, or command exit code
+int executeCommand(const std::string& cmd, const std::string& workingDir = "",
+                   const std::string& envName = "", const std::string& envValue = "");
 
 // Terminate a process by PID
 // Returns true on success

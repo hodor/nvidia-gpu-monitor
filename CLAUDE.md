@@ -28,13 +28,13 @@ build\Release\gpu_monitor.exe
 ### Linux
 ```bash
 # Install dependencies (Debian/Ubuntu)
-sudo apt install clang libglfw3-dev libgl1-mesa-dev
+sudo apt install g++-13 libglfw3-dev libgl1-mesa-dev
 
-# Build using script (recommended - uses Clang)
+# Build using script (recommended - uses GCC)
 ./build.sh
 
-# Or manually with Clang:
-CC=clang CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Or manually:
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # Output executable
@@ -46,7 +46,7 @@ cmake --build build
 - **CUDA Toolkit** - Required for NVML headers and library (auto-detected)
 - **Dear ImGui** - Bundled in `external/imgui/` (docking branch)
 - **Windows**: DirectX 11 (Windows SDK), Visual Studio 2022 (MSVC)
-- **Linux**: GLFW3, OpenGL3, Clang (preferred) or GCC
+- **Linux**: GLFW3, OpenGL3, GCC 13+ (for C++20 jthread/stop_token support)
 
 ## Architecture
 
@@ -126,6 +126,7 @@ When making changes to this project:
 - Fix the environment/tooling if that's the actual problem
 - Maintain code quality standards - don't downgrade code to accommodate broken setups
 - If C++20 features don't work somewhere, fix the compiler/toolchain, don't rewrite to C++11
+- **Every warning has a reason** - investigate and fix warnings properly. If you believe a warning should be ignored, ask the user first and explain why. Never silently suppress or work around warnings.
 
 ### Adding Features
 - **New GPU metrics**: Add to `GpuStats` struct, update `updateStats()` in `gpu_monitor.cpp`, render in `ui.cpp`

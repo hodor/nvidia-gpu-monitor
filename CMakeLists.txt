@@ -146,10 +146,4 @@ else()
     )
 
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra)
-
-    # Use libc++ when compiling with Clang (required for <format> support)
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(${PROJECT_NAME} PRIVATE -stdlib=libc++)
-        target_link_options(${PROJECT_NAME} PRIVATE -stdlib=libc++)
-    endif()
 endif()

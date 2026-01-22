@@ -1,8 +1,8 @@
 #include "ui.h"
 #include "platform/platform.h"
 #include "imgui.h"
-#include <format>
 #include <ranges>
+#include <cstdio>
 #include <fstream>
 #include <filesystem>
 
@@ -344,7 +344,7 @@ std::string GpuMonitorUI::buildExcludeDevices(const std::vector<GpuStats>& allSt
     for (const auto& gpu : allStats) {
         if (gpu.cudaIndex != excludeIndex) {
             if (!result.empty()) result += ",";
-            result += std::format("{}", gpu.cudaIndex);
+            result += std::to_string(gpu.cudaIndex);
         }
     }
     return result;
@@ -356,15 +356,19 @@ std::string GpuMonitorUI::buildNvlinkPair(const std::vector<GpuStats>& allStats)
     for (const auto& gpu : allStats) {
         if (gpu.isTCC) {
             if (!result.empty()) result += ",";
-            result += std::format("{}", gpu.cudaIndex);
+            result += std::to_string(gpu.cudaIndex);
         }
     }
     return result;
 }
 
 void GpuMonitorUI::openTerminalWithGpu(const std::string& cudaDevices, const std::string& label) {
-    Platform::openTerminalWithEnv("CUDA_VISIBLE_DEVICES", cudaDevices, label);
-    showCopiedToast("Terminal opened");
+    int result = Platform::openTerminalWithEnv("CUDA_VISIBLE_DEVICES", cudaDevices, label);
+    if (result == 0) {
+        showCopiedToast("Terminal opened");
+    } else {
+        showCopiedToast("Failed to open terminal");
+    }
 }
 
 
@@ -712,9 +716,13 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
             if (ImGui::Button(!preset.name.empty() ? preset.name.c_str() : "Unnamed")) {
                 // Launch the preset
                 std::string gpuSel = buildGpuSelectionString(preset, gpuStats);
-                Platform::executeCommand(preset.command, preset.workingDir,
-                                         gpuSel.empty() ? "" : "CUDA_VISIBLE_DEVICES", gpuSel);
-                showCopiedToast("Launched");
+                int result = Platform::executeCommand(preset.command, preset.workingDir,
+                                                      gpuSel.empty() ? "" : "CUDA_VISIBLE_DEVICES", gpuSel);
+                if (result == 0) {
+                    showCopiedToast("Launched");
+                } else {
+                    showCopiedToast("Failed to launch");
+                }
             }
             ImGui::SameLine();
             ImGui::TextDisabled("[%s]", gpuLabel.c_str());
@@ -1612,8 +1620,8 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // Use only this GPU
     {
-        std::string idx = std::format("{}", stats.cudaIndex);
-        std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", idx);
+        std::string idx = std::to_string(stats.cudaIndex);
+        std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + idx + "\"";
         if (ImGui::Button("Use Only This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("CUDA_VISIBLE_DEVICES");
@@ -1631,7 +1639,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
         std::string tccIndices = buildNvlinkPair(allStats);
         if (!tccIndices.empty() && tccIndices.find(',') != std::string::npos) {
             // Only show if there are multiple TCC GPUs
-            std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", tccIndices);
+            std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + tccIndices + "\"";
             if (ImGui::Button("Use All TCC GPUs")) {
                 copyToClipboard(cmd);
                 showCopiedToast("TCC GPUs");
@@ -1648,14 +1656,14 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Exclude this GPU
     {
         std::string otherIndices = buildExcludeDevices(allStats, stats.cudaIndex);
-        std::string cmd = std::format("$env:CUDA_VISIBLE_DEVICES=\"{}\"", otherIndices);
+        std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + otherIndices + "\"";
         if (ImGui::Button("Exclude This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("Exclude GPU");
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Open Terminal##exclude")) {
-            openTerminalWithGpu(otherIndices, std::format("Excluding {}", displayName));
+            openTerminalWithGpu(otherIndices, "Excluding " + displayName);
         }
         ImGui::SameLine();
         ImGui::TextDisabled("cuda:%s", otherIndices.c_str());
@@ -1683,7 +1691,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // nvidia-smi for this GPU
     {
-        std::string cmd = std::format("nvidia-smi -i {}", stats.cudaIndex);
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex);
         if (ImGui::Button("nvidia-smi")) {
             copyToClipboard(cmd);
             showCopiedToast("nvidia-smi command");
@@ -1701,18 +1709,18 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Toggle TCC/WDDM
     {
         std::string targetMode = stats.isTCC ? "WDDM" : "TCC";
+        std::string currentMode = stats.isTCC ? "TCC" : "WDDM";
         int modeValue = stats.isTCC ? 0 : 1;
-        std::string cmd = std::format("nvidia-smi -i {} -dm {}", stats.cudaIndex, modeValue);
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " -dm " + std::to_string(modeValue);
 
-        std::string btnLabel = std::format("Switch to {}", targetMode);
+        std::string btnLabel = "Switch to " + targetMode;
         if (ImGui::Button(btnLabel.c_str())) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Toggle Driver Mode";
-            m_confirmDialog.message = std::format(
-                "This will switch GPU {} ({}) from {} to {} mode.\n\n"
-                "A system restart is required for this change to take effect.",
-                stats.cudaIndex, displayName, stats.isTCC ? "TCC" : "WDDM", targetMode);
+            m_confirmDialog.message = "This will switch GPU " + std::to_string(stats.cudaIndex) +
+                " (" + displayName + ") from " + currentMode + " to " + targetMode + " mode.\n\n"
+                "A system restart is required for this change to take effect.";
             m_confirmDialog.command = cmd;
         }
     }
@@ -1721,14 +1729,13 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // Reset GPU
     {
-        std::string cmd = std::format("nvidia-smi -i {} --gpu-reset", stats.cudaIndex);
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " --gpu-reset";
         if (ImGui::Button("Reset GPU")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Reset GPU";
-            m_confirmDialog.message = std::format(
-                "This will reset GPU {} ({}).\n\nAll running processes on this GPU will be terminated.",
-                stats.cudaIndex, displayName);
+            m_confirmDialog.message = "This will reset GPU " + std::to_string(stats.cudaIndex) +
+                " (" + displayName + ").\n\nAll running processes on this GPU will be terminated.";
             m_confirmDialog.command = cmd;
         }
     }
@@ -1740,17 +1747,16 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     const unsigned int powerPresets[] = {200, 250, 300};
     for (int i = 0; i < 3; i++) {
         unsigned int watts = powerPresets[i];
-        std::string label = std::format("{}W", watts);
-        std::string cmd = std::format("nvidia-smi -i {} -pl {}", stats.cudaIndex, watts);
+        std::string label = std::to_string(watts) + "W";
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " -pl " + std::to_string(watts);
 
         if (i > 0) ImGui::SameLine();
         if (ImGui::SmallButton(label.c_str())) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Set Power Limit";
-            m_confirmDialog.message = std::format(
-                "This will set the power limit for GPU {} ({}) to {}W.",
-                stats.cudaIndex, displayName, watts);
+            m_confirmDialog.message = "This will set the power limit for GPU " + std::to_string(stats.cudaIndex) +
+                " (" + displayName + ") to " + std::to_string(watts) + "W.";
             m_confirmDialog.command = cmd;
         }
     }
@@ -1758,17 +1764,17 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Kill processes on this GPU
     {
         // This uses a PowerShell one-liner to find and kill processes
-        std::string cmd = std::format(
-            "(nvidia-smi -i {} --query-compute-apps=pid --format=csv,noheader) | "
-            "ForEach-Object {{ Stop-Process -Id $_ -Force }}", stats.cudaIndex);
+        std::string cmd = "(nvidia-smi -i " + std::to_string(stats.cudaIndex) +
+            " --query-compute-apps=pid --format=csv,noheader) | "
+            "ForEach-Object { Stop-Process -Id $_ -Force }";
 
         if (ImGui::Button("Kill All Processes")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Kill GPU Processes";
-            m_confirmDialog.message = std::format(
-                "This will forcefully terminate ALL processes running on GPU {} ({}).\n\n"
-                "This may cause data loss in running applications!", stats.cudaIndex, displayName);
+            m_confirmDialog.message = "This will forcefully terminate ALL processes running on GPU " +
+                std::to_string(stats.cudaIndex) + " (" + displayName + ").\n\n"
+                "This may cause data loss in running applications!";
             m_confirmDialog.command = cmd;
         }
     }
