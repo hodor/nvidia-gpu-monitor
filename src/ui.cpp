@@ -492,15 +492,16 @@ void GpuMonitorUI::renderCompactMetrics(const GpuStats& stats) {
     std::string coreSparkId = "##spark_core_" + stats.uuid;
     std::string memSparkId = "##spark_mem_" + stats.uuid;
 
-    // Pre-format value strings
-    std::string powerValueStr = std::format("{}/{}W", stats.powerDraw, stats.powerLimit);
-    std::string coreValueStr = std::format("{}/{}MHz", stats.gpuClock, stats.gpuClockMax);
-    std::string memValueStr = std::format("{}/{}MHz", stats.memClock, stats.memClockMax);
+    // Pre-format value strings (stack buffers to avoid heap allocations)
+    char powerValueStr[32], coreValueStr[32], memValueStr[32];
+    snprintf(powerValueStr, sizeof(powerValueStr), "%u/%uW", stats.powerDraw, stats.powerLimit);
+    snprintf(coreValueStr, sizeof(coreValueStr), "%u/%uMHz", stats.gpuClock, stats.gpuClockMax);
+    snprintf(memValueStr, sizeof(memValueStr), "%u/%uMHz", stats.memClock, stats.memClockMax);
 
     MetricInfo metrics[] = {
-        {"Power", powerValueStr.c_str(), powerFrac, powerData, powerSparkId.c_str()},
-        {"Core", coreValueStr.c_str(), coreClockFrac, coreData, coreSparkId.c_str()},
-        {"Mem", memValueStr.c_str(), memClockFrac, memData, memSparkId.c_str()}
+        {"Power", powerValueStr, powerFrac, powerData, powerSparkId.c_str()},
+        {"Core", coreValueStr, coreClockFrac, coreData, coreSparkId.c_str()},
+        {"Mem", memValueStr, memClockFrac, memData, memSparkId.c_str()}
     };
 
     bool anyHovered = false;
@@ -570,12 +571,13 @@ void GpuMonitorUI::renderCompactMetrics(const GpuStats& stats) {
             anyHovered = true;
 
             // Time label only shown on hover (vertically centered, right-aligned)
-            std::string timeLabel = std::format("{}s", displaySecs);
-            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel.c_str());
+            char timeLabel[16];
+            snprintf(timeLabel, sizeof(timeLabel), "%ds", displaySecs);
+            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel);
             drawList->AddText(
                 ImVec2(sparkPos.x + sparkSize.x - timeLabelSize.x - 4,
                        sparkPos.y + (sparkSize.y - timeLabelSize.y) / 2),
-                IM_COL32(120, 120, 130, 255), timeLabel.c_str()
+                IM_COL32(120, 120, 130, 255), timeLabel
             );
         }
     }
@@ -1171,9 +1173,10 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         drawList->AddRect(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
             IM_COL32(50, 50, 55, 255), 2.0f);
         curX += barWidth + 3.0f;
-        std::string vramStr = std::format("{}%", static_cast<int>(vramFrac * 100.0f + 0.5f));
-        drawList->AddText(ImVec2(curX, startPos.y), vramColor, vramStr.c_str());
-        curX += ImGui::CalcTextSize(vramStr.c_str()).x + 10.0f;
+        char vramStr[16];
+        snprintf(vramStr, sizeof(vramStr), "%d%%", static_cast<int>(vramFrac * 100.0f + 0.5f));
+        drawList->AddText(ImVec2(curX, startPos.y), vramColor, vramStr);
+        curX += ImGui::CalcTextSize(vramStr).x + 10.0f;
 
         // GPU mini bar with 4-color health
         int gpuHealth = getVramHealth(gpuUtilFrac);  // Same thresholds as VRAM
@@ -1189,9 +1192,10 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         drawList->AddRect(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
             IM_COL32(50, 50, 55, 255), 2.0f);
         curX += barWidth + 3.0f;
-        std::string gpuStr = std::format("{}%", stats.gpuUtilization);
-        drawList->AddText(ImVec2(curX, startPos.y), gpuColor, gpuStr.c_str());
-        curX += ImGui::CalcTextSize(gpuStr.c_str()).x + 10.0f;
+        char gpuStr[16];
+        snprintf(gpuStr, sizeof(gpuStr), "%u%%", stats.gpuUtilization);
+        drawList->AddText(ImVec2(curX, startPos.y), gpuColor, gpuStr);
+        curX += ImGui::CalcTextSize(gpuStr).x + 10.0f;
 
         // Fan donut widget
         int fanHealth = getFanHealth(stats.fanSpeed);
@@ -1212,20 +1216,23 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
             drawList->PathStroke(fanColor, 0, donutThickness);
         }
         curX += 16.0f;
-        std::string fanStr = std::format("{}%", stats.fanSpeed);
-        drawList->AddText(ImVec2(curX, startPos.y), fanColor, fanStr.c_str());
-        curX += ImGui::CalcTextSize(fanStr.c_str()).x + 10.0f;
+        char fanStr[16];
+        snprintf(fanStr, sizeof(fanStr), "%u%%", stats.fanSpeed);
+        drawList->AddText(ImVec2(curX, startPos.y), fanColor, fanStr);
+        curX += ImGui::CalcTextSize(fanStr).x + 10.0f;
 
         // Temperature with 4-color health
         int tempHealth = getTempHealth(stats.temperature);
         ImU32 tempColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(tempHealth));
-        std::string tempStr = std::format("{}C", stats.temperature);
-        drawList->AddText(ImVec2(curX, startPos.y), tempColor, tempStr.c_str());
-        curX += ImGui::CalcTextSize(tempStr.c_str()).x + 10.0f;
+        char tempStr[16];
+        snprintf(tempStr, sizeof(tempStr), "%uC", stats.temperature);
+        drawList->AddText(ImVec2(curX, startPos.y), tempColor, tempStr);
+        curX += ImGui::CalcTextSize(tempStr).x + 10.0f;
 
         // PCIe info (right side)
-        std::string pcieStr = std::format("Gen{} x{}", stats.pcieGen, stats.pcieWidth);
-        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(100, 100, 100, 255), pcieStr.c_str());
+        char pcieStr[16];
+        snprintf(pcieStr, sizeof(pcieStr), "Gen%u x%u", stats.pcieGen, stats.pcieWidth);
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(100, 100, 100, 255), pcieStr);
 
         ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + rowHeight + 4.0f));
         ImGui::Separator();
@@ -1363,12 +1370,13 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
 
         // Time label only shown on hover (vertically centered, right-aligned)
         if (hovered) {
-            std::string timeLabel = std::format("{}s", displaySecs);
-            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel.c_str());
+            char timeLabel[16];
+            snprintf(timeLabel, sizeof(timeLabel), "%ds", displaySecs);
+            ImVec2 timeLabelSize = ImGui::CalcTextSize(timeLabel);
             drawList->AddText(
                 ImVec2(sparkPos.x + sparkSize.x - timeLabelSize.x - 4,
                        sparkPos.y + (sparkSize.y - timeLabelSize.y) / 2),
-                IM_COL32(120, 120, 130, 255), timeLabel.c_str()
+                IM_COL32(120, 120, 130, 255), timeLabel
             );
         }
 
@@ -1381,18 +1389,20 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     // VRAM - show used/total, percentage, and available
     float vramAvailGB = vramTotalGB - vramUsedGB;
     int vramPercent = static_cast<int>(vramFrac * 100.0f + 0.5f);
-    std::string vramValueStr = std::format("{:.1f}/{:.0f}GB ({}%) | {:.1f}GB free",
-                                           vramUsedGB, vramTotalGB, vramPercent, vramAvailGB);
+    char vramValueStr[64];
+    snprintf(vramValueStr, sizeof(vramValueStr), "%.1f/%.0fGB (%d%%) | %.1fGB free",
+             vramUsedGB, vramTotalGB, vramPercent, vramAvailGB);
     std::string vramSparkId = "##spark_vram_" + stats.uuid;
-    if (renderFullWidthMetric("VRAM", vramValueStr.c_str(), vramFrac,
+    if (renderFullWidthMetric("VRAM", vramValueStr, vramFrac,
                                vramData, dataCount, vramSparkId.c_str(), true)) {
         anyVramGpuHovered = true;
     }
 
     // GPU Utilization
-    std::string gpuValueStr = std::format("{}%", stats.gpuUtilization);
+    char gpuValueStr[16];
+    snprintf(gpuValueStr, sizeof(gpuValueStr), "%u%%", stats.gpuUtilization);
     std::string gpuSparkId = "##spark_gpuutil_" + stats.uuid;
-    if (renderFullWidthMetric("GPU", gpuValueStr.c_str(), gpuUtilFrac,
+    if (renderFullWidthMetric("GPU", gpuValueStr, gpuUtilFrac,
                                gpuUtilData, dataCount, gpuSparkId.c_str(), true)) {
         anyVramGpuHovered = true;
     }
@@ -1491,9 +1501,10 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
             IM_COL32(60, 60, 65, 255), 2.0f);
         curX += barWidth + 3.0f;
 
-        std::string tempStr = std::format("{}C", stats.temperature);
-        drawList->AddText(ImVec2(curX, startPos.y), tempColorU32, tempStr.c_str());
-        curX += ImGui::CalcTextSize(tempStr.c_str()).x + 14.0f;
+        char tempStr[16];
+        snprintf(tempStr, sizeof(tempStr), "%uC", stats.temperature);
+        drawList->AddText(ImVec2(curX, startPos.y), tempColorU32, tempStr);
+        curX += ImGui::CalcTextSize(tempStr).x + 14.0f;
 
         // Fan: Label + Donut + Value
         int fanHealth = getFanHealth(stats.fanSpeed);
@@ -1520,12 +1531,14 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         }
         curX += 16.0f;
 
-        std::string fanStr = std::format("{}%", stats.fanSpeed);
-        drawList->AddText(ImVec2(curX, startPos.y), fanColorU32, fanStr.c_str());
+        char fanStr[16];
+        snprintf(fanStr, sizeof(fanStr), "%u%%", stats.fanSpeed);
+        drawList->AddText(ImVec2(curX, startPos.y), fanColorU32, fanStr);
 
         // === RIGHT SIDE: PCIe + Bus (right-aligned) ===
-        std::string pcieStr = std::format("Gen{} x{}", stats.pcieGen, stats.pcieWidth);
-        ImVec2 pcieSize = ImGui::CalcTextSize(pcieStr.c_str());
+        char pcieStr[16];
+        snprintf(pcieStr, sizeof(pcieStr), "Gen%u x%u", stats.pcieGen, stats.pcieWidth);
+        ImVec2 pcieSize = ImGui::CalcTextSize(pcieStr);
         ImVec2 busSize = ImGui::CalcTextSize(stats.pciBusId.c_str());
 
         float rightMargin = 8.0f;
@@ -1538,7 +1551,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
 
         // PCIe (to the left of Bus)
         float pcieX = busX - gap - pcieSize.x;
-        drawList->AddText(ImVec2(pcieX, startPos.y), IM_COL32(140, 140, 140, 255), pcieStr.c_str());
+        drawList->AddText(ImVec2(pcieX, startPos.y), IM_COL32(140, 140, 140, 255), pcieStr);
 
         // Advance cursor
         ImGui::SetCursorScreenPos(ImVec2(startPos.x, startPos.y + rowHeight));

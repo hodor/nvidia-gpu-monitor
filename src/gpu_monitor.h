@@ -1,11 +1,11 @@
 #pragma once
 
-#include <string>
-#include <vector>
 #include <map>
-#include <thread>
 #include <mutex>
 #include <stop_token>
+#include <string>
+#include <thread>
+#include <vector>
 
 // Process running on a GPU
 struct GpuProcess {
@@ -84,7 +84,7 @@ private:
     void pollThread(std::stop_token stopToken);
     void updateStats();
     void updateSystemInfo();
-    std::string getProcessName(unsigned int pid);
+    std::string getProcessName(unsigned int pid, bool forceRefresh = false);
 
     std::vector<GpuStats> m_stats;
     SystemInfo m_systemInfo;
@@ -92,4 +92,9 @@ private:
     std::jthread m_pollThread;
     int m_pollIntervalMs{1000};
     bool m_initialized{false};
+
+    // Process name caching - only refresh names every N polls to reduce syscalls
+    int m_processNameUpdateInterval{5};  // Refresh process names every N polls
+    int m_pollsSinceProcessNameUpdate{0};
+    std::map<unsigned int, std::string> m_processNameCache;  // PID -> name
 };

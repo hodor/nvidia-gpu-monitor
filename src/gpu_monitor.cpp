@@ -6,6 +6,7 @@
 #include <cstring>
 #include <format>
 #include <ranges>
+#include <set>
 
 GpuMonitor::GpuMonitor() = default;
 
@@ -35,8 +36,19 @@ void GpuMonitor::shutdown() {
     }
 }
 
-std::string GpuMonitor::getProcessName(unsigned int pid) {
-    return Platform::getProcessName(pid);
+std::string GpuMonitor::getProcessName(unsigned int pid, bool forceRefresh) {
+    // Check cache first (unless forcing refresh)
+    if (!forceRefresh) {
+        auto it = m_processNameCache.find(pid);
+        if (it != m_processNameCache.end()) {
+            return it->second;
+        }
+    }
+
+    // Lookup and cache
+    std::string name = Platform::getProcessName(pid);
+    m_processNameCache[pid] = name;
+    return name;
 }
 
 void GpuMonitor::updateStats() {
@@ -45,6 +57,16 @@ void GpuMonitor::updateStats() {
     unsigned int deviceCount = 0;
     nvmlReturn_t result = nvmlDeviceGetCount(&deviceCount);
     if (result != NVML_SUCCESS) return;
+
+    // Determine if we should refresh process names this poll
+    m_pollsSinceProcessNameUpdate++;
+    bool refreshProcessNames = (m_pollsSinceProcessNameUpdate >= m_processNameUpdateInterval);
+    if (refreshProcessNames) {
+        m_pollsSinceProcessNameUpdate = 0;
+    }
+
+    // Track which PIDs are still active (for cache cleanup)
+    std::set<unsigned int> activePids;
 
     std::vector<GpuStats> newStats;
     newStats.reserve(deviceCount);
@@ -150,7 +172,8 @@ void GpuMonitor::updateStats() {
                 GpuProcess proc;
                 proc.pid = processInfos[p].pid;
                 proc.usedMemory = processInfos[p].usedGpuMemory;
-                proc.name = getProcessName(proc.pid);
+                proc.name = getProcessName(proc.pid, refreshProcessNames);
+                activePids.insert(proc.pid);
                 stats.processes.push_back(proc);
             }
         }
@@ -167,7 +190,8 @@ void GpuMonitor::updateStats() {
                     GpuProcess proc;
                     proc.pid = pid;
                     proc.usedMemory = processInfos[p].usedGpuMemory;
-                    proc.name = getProcessName(proc.pid);
+                    proc.name = getProcessName(proc.pid, refreshProcessNames);
+                    activePids.insert(proc.pid);
                     stats.processes.push_back(proc);
                 }
             }
@@ -193,6 +217,13 @@ void GpuMonitor::updateStats() {
 
     // Sort by PCI bus ID (matches physical slot order when looking at hardware)
     std::ranges::sort(newStats, {}, &GpuStats::pciBusId);
+
+    // Clean up stale process name cache entries (processes that no longer exist)
+    if (refreshProcessNames) {
+        std::erase_if(m_processNameCache, [&activePids](const auto& entry) {
+            return activePids.find(entry.first) == activePids.end();
+        });
+    }
 
     // Update shared stats
     {
