@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -16,14 +16,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Clang and Dependencies
+      - name: Install Dependencies
         run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
-          sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" -y
           sudo apt-get update
-          sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libglfw3-dev libgl1-mesa-dev
-          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
-          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
+          sudo apt-get install -y clang libc++-dev libc++abi-dev libglfw3-dev libgl1-mesa-dev
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.16
