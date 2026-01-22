@@ -28,12 +28,13 @@ build\Release\gpu_monitor.exe
 ### Linux
 ```bash
 # Install dependencies (Debian/Ubuntu)
-sudo apt install libglfw3-dev libgl1-mesa-dev
+sudo apt install clang libglfw3-dev libgl1-mesa-dev
 
-# Generate build files
-cmake -B build
+# Build using script (recommended - uses Clang)
+./build.sh
 
-# Build
+# Or manually with Clang:
+CC=clang CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 
 # Output executable
@@ -44,8 +45,8 @@ cmake --build build
 
 - **CUDA Toolkit** - Required for NVML headers and library (auto-detected)
 - **Dear ImGui** - Bundled in `external/imgui/` (docking branch)
-- **Windows**: DirectX 11 (Windows SDK), Visual Studio 2022
-- **Linux**: GLFW3, OpenGL3, GCC/Clang
+- **Windows**: DirectX 11 (Windows SDK), Visual Studio 2022 (MSVC)
+- **Linux**: GLFW3, OpenGL3, Clang (preferred) or GCC
 
 ## Architecture
 

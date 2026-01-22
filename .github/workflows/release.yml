@@ -53,17 +53,14 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install GCC 13 (C++20 <format> support)
+      - name: Install Clang and Dependencies
         run: |
-          sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+          sudo add-apt-repository "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" -y
           sudo apt-get update
-          sudo apt-get install -y gcc-13 g++-13
-          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
-          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get install -y libglfw3-dev libgl1-mesa-dev
+          sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libglfw3-dev libgl1-mesa-dev
+          sudo update-alternatives --install /usr/bin/clang clang /usr/bin/clang-18 100
+          sudo update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-18 100
 
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.16
@@ -74,10 +71,10 @@ jobs:
           linux-local-args: '["--toolkit"]'
 
       - name: Configure CMake
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        run: CC=clang CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build build -j$(nproc)
 
       - name: Package
         run: |

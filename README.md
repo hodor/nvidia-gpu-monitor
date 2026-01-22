@@ -18,6 +18,12 @@ A lightweight, cross-platform desktop application for real-time NVIDIA GPU monit
 - PCIe generation and lane width
 - ECC error counts (when supported)
 
+### Low-Overhead Design
+- **1-second polling interval** - minimal impact on GPU workloads
+- Safe to run alongside profiling tools (Nsight, etc.)
+- NVML queries are read-only, no GPU commands submitted
+- UI renders on WDDM display GPU, leaving compute GPUs untouched
+
 **Time-Dilate**: Drag on any sparkline to adjust the time window from 5 seconds to 10 minutes. See your GPU history at any scale.
 
 ![Time-Dilate Feature](img/time_scale.gif)
@@ -101,9 +107,13 @@ cmake --build build --config Release
 
 ```bash
 # Install dependencies (Debian/Ubuntu)
-sudo apt install libglfw3-dev libgl1-mesa-dev
+sudo apt install clang libglfw3-dev libgl1-mesa-dev
 
-cmake -B build -DCMAKE_BUILD_TYPE=Release
+# Use the build script (recommended - uses Clang)
+./build.sh
+
+# Or manually:
+CC=clang CXX=clang++ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/gpu_monitor
 ```
