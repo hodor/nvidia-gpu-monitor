@@ -64,6 +64,17 @@ int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
     return system(cmd.c_str());
 }
 
+std::string normalizeCommand(const std::string& cmd) {
+    std::string result = cmd;
+    // Replace \n with " && " for bash (stop on first failure)
+    size_t pos = 0;
+    while ((pos = result.find('\n', pos)) != std::string::npos) {
+        result.replace(pos, 1, " && ");
+        pos += 4;
+    }
+    return result;
+}
+
 int executeCommand(const std::string& cmd, const std::string& workingDir,
                    const std::string& envName, const std::string& envValue) {
     std::string fullCmd;
@@ -74,7 +85,7 @@ int executeCommand(const std::string& cmd, const std::string& workingDir,
     if (!envName.empty()) {
         fullCmd += "export " + envName + "='" + envValue + "' && ";
     }
-    fullCmd += cmd + " &";
+    fullCmd += normalizeCommand(cmd) + " &";
 
     return system(fullCmd.c_str());
 }

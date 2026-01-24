@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(gpu_monitor VERSION 0.1.1 LANGUAGES CXX)
+project(gpu_monitor VERSION 0.1.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -93,6 +93,7 @@ if(WIN32)
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
         ${NVML_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/external/icons
     )
 
     target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -137,6 +138,7 @@ else()
         ${IMGUI_DIR}
         ${IMGUI_DIR}/backends
         ${NVML_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/external/icons
     )
 
     target_link_libraries(${PROJECT_NAME} PRIVATE

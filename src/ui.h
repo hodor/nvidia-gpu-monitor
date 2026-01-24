@@ -22,6 +22,9 @@ struct GpuConfig {
     std::string uuid;           // GPU UUID (unique identifier)
     std::string nickname;       // User-defined nickname (e.g., "TOP", "Compute 1")
     int displayOrder = -1;      // User-defined display order (-1 = use default bus ID order)
+    bool cardOpen = false;      // GPU card expanded (shows details)
+    bool processesOpen = false; // Processes section expanded
+    bool commandsOpen = false;  // Commands section expanded
 };
 
 // Quick launch preset
@@ -37,6 +40,7 @@ struct QuickLaunchPreset {
 struct Settings {
     std::vector<QuickLaunchPreset> presets;  // Quick launch presets
     std::vector<GpuConfig> gpuConfigs;       // GPU configurations
+    bool quickLaunchOpen = false;            // Quick Launch section expanded
 };
 
 // Drag-and-drop state

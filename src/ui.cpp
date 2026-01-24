@@ -1,6 +1,8 @@
 #include "ui.h"
 #include "platform/platform.h"
 #include "imgui.h"
+#include "imgui_internal.h"
+#include "IconsFontAwesome6.h"
 #include <ranges>
 #include <cstdio>
 #include <fstream>
@@ -19,6 +21,168 @@ static bool InputTextString(const char* label, std::string& str, ImGuiInputTextF
         str = buffer;
     }
     return changed;
+}
+
+// Helper for ImGui::InputTextMultiline with line numbers, dynamic height, placeholder hint, and hover tooltip
+// - Shows line numbers in a gutter on the left (perfectly aligned with text lines)
+// - Grows with content up to maxHeight, then shows scrollbar
+// - Shows hint text when empty
+// - Shows tooltip on hover after delay
+static bool InputTextMultilineWithHint(const char* label, const char* hint, std::string& str,
+                                       const char* tooltip, float maxHeight = 200.0f) {
+    constexpr size_t bufferSize = 2048;
+    char buffer[bufferSize];
+    Platform::safeCopy(buffer, bufferSize, str.c_str());
+
+    // InputTextMultiline uses FontSize for line height, not GetTextLineHeightWithSpacing
+    float lineHeight = ImGui::GetFontSize();
+    ImVec2 framePadding = ImGui::GetStyle().FramePadding;
+
+    // Count lines in hint for minimum height (so placeholder fits)
+    int hintLineCount = 1;
+    for (const char* p = hint; *p; p++) {
+        if (*p == '\n') hintLineCount++;
+    }
+
+    // Count lines in the actual content
+    int lineCount = str.empty() ? 0 : 1;
+    for (char c : str) {
+        if (c == '\n') lineCount++;
+    }
+
+    // Calculate heights
+    int effectiveLines = str.empty() ? hintLineCount : lineCount;
+    float contentHeight = effectiveLines * lineHeight + framePadding.y * 2;
+    float minHeight = hintLineCount * lineHeight + framePadding.y * 2;
+    if (contentHeight < minHeight) contentHeight = minHeight;
+
+    float visibleHeight = contentHeight;
+    if (visibleHeight > maxHeight) visibleHeight = maxHeight;
+
+    // Layout dimensions
+    float gutterWidth = 30.0f;
+    float availWidth = ImGui::GetContentRegionAvail().x;
+
+    // The input takes full width, we'll overlay line numbers on the left
+    // Add left padding to input via indent
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(framePadding.x + gutterWidth, framePadding.y));
+
+    bool changed = ImGui::InputTextMultiline(label, buffer, bufferSize,
+        ImVec2(availWidth, visibleHeight),
+        ImGuiInputTextFlags_AllowTabInput);
+
+    ImGui::PopStyleVar();
+
+    if (changed) {
+        str = buffer;
+    }
+
+    // Get the input's scroll position and rect
+    ImVec2 inputMin = ImGui::GetItemRectMin();
+    ImVec2 inputMax = ImGui::GetItemRectMax();
+
+    // Draw line numbers overlay (clipped to input area)
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(inputMin, inputMax, true);
+
+    // Get scroll offset and text start position from the InputTextMultiline's internal child window
+    float scrollY = 0.0f;
+    float textStartY = inputMin.y + framePadding.y;  // fallback
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    for (int i = g.Windows.Size - 1; i >= 0; i--) {
+        ImGuiWindow* window = g.Windows[i];
+        if (window && strstr(window->Name, label)) {
+            scrollY = window->Scroll.y;
+            // InputTextMultiline uses: window->Pos + WindowPadding + FramePadding
+            // (BeginChildFrame sets WindowPadding=FramePadding, then InputTextEx adds another FramePadding)
+            textStartY = window->Pos.y + window->WindowPadding.y + framePadding.y - scrollY;
+            break;
+        }
+    }
+
+    // Draw gutter background
+    ImVec2 gutterMin = inputMin;
+    ImVec2 gutterMax = ImVec2(inputMin.x + gutterWidth, inputMax.y);
+    drawList->AddRectFilled(gutterMin, gutterMax, ImGui::GetColorU32(ImVec4(0.1f, 0.1f, 0.1f, 0.8f)));
+
+    // Draw separator line
+    drawList->AddLine(
+        ImVec2(gutterMax.x - 1, gutterMin.y),
+        ImVec2(gutterMax.x - 1, gutterMax.y),
+        ImGui::GetColorU32(ImGuiCol_Border), 1.0f);
+
+    // Draw line numbers - vertically centered within each line slot to match text
+    if (!str.empty()) {
+        for (int i = 1; i <= lineCount; i++) {
+            float lineSlotY = textStartY + (i - 1) * lineHeight;
+            // Only draw if visible
+            if (lineSlotY + lineHeight >= inputMin.y && lineSlotY <= inputMax.y) {
+                char numBuf[16];
+                snprintf(numBuf, sizeof(numBuf), "%3d", i);
+                // Center the line number vertically within the line slot
+                float numHeight = ImGui::CalcTextSize(numBuf).y;
+                float drawY = lineSlotY + (lineHeight - numHeight) / 2;
+                drawList->AddText(ImVec2(inputMin.x + 4, drawY),
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled), numBuf);
+            }
+        }
+    }
+
+    drawList->PopClipRect();
+
+    // Draw hint text if buffer is empty and not focused
+    if (str.empty() && !ImGui::IsItemActive()) {
+        ImVec2 textPos = ImVec2(inputMin.x + gutterWidth + framePadding.x, inputMin.y + framePadding.y);
+        // Clip hint to input area (excluding gutter)
+        drawList->PushClipRect(ImVec2(inputMin.x + gutterWidth, inputMin.y), inputMax, true);
+        drawList->AddText(textPos, ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
+        drawList->PopClipRect();
+    }
+
+    // Show tooltip on hover with delay
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+        ImGui::SetTooltip("%s", tooltip);
+    }
+
+    return changed;
+}
+
+// Helper to escape strings for JSON (handles newlines, backslashes, quotes)
+static std::string escapeJson(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+    for (char c : str) {
+        switch (c) {
+            case '\n': result += "\\n"; break;
+            case '\r': result += "\\r"; break;
+            case '\t': result += "\\t"; break;
+            case '\\': result += "\\\\"; break;
+            case '"': result += "\\\""; break;
+            default: result += c; break;
+        }
+    }
+    return result;
+}
+
+// Helper to unescape JSON strings
+static std::string unescapeJson(const std::string& str) {
+    std::string result;
+    result.reserve(str.size());
+    for (size_t i = 0; i < str.size(); i++) {
+        if (str[i] == '\\' && i + 1 < str.size()) {
+            switch (str[i + 1]) {
+                case 'n': result += '\n'; i++; break;
+                case 'r': result += '\r'; i++; break;
+                case 't': result += '\t'; i++; break;
+                case '\\': result += '\\'; i++; break;
+                case '"': result += '"'; i++; break;
+                default: result += str[i]; break;
+            }
+        } else {
+            result += str[i];
+        }
+    }
+    return result;
 }
 
 GpuMonitorUI::GpuMonitorUI() {
@@ -41,6 +205,13 @@ void GpuMonitorUI::loadSettings() {
     GpuConfig* currentConfig = nullptr;
 
     while (std::getline(file, line)) {
+        // Parse global settings (outside sections)
+        if (!inPresets && !inGpuConfigs) {
+            if (line.find("\"quickLaunchOpen\":") != std::string::npos) {
+                m_settings.quickLaunchOpen = (line.find("true") != std::string::npos);
+            }
+        }
+
         // Track which section we're in
         if (line.find("\"presets\"") != std::string::npos) {
             inPresets = true;
@@ -62,25 +233,25 @@ void GpuMonitorUI::loadSettings() {
                 size_t pos;
                 if ((pos = line.find("\"name\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 7) + 1;
-                    size_t end = line.find("\"", start);
-                    if (start != std::string::npos && end != std::string::npos) {
-                        currentPreset->name = line.substr(start, end - start);
+                    size_t end = line.rfind("\"");  // Last quote on line
+                    if (start != std::string::npos && end != std::string::npos && end > start) {
+                        currentPreset->name = unescapeJson(line.substr(start, end - start));
                     }
                 } else if ((pos = line.find("\"command\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 10) + 1;
-                    size_t end = line.find("\"", start);
-                    if (start != std::string::npos && end != std::string::npos) {
-                        currentPreset->command = line.substr(start, end - start);
+                    size_t end = line.rfind("\"");  // Last quote on line
+                    if (start != std::string::npos && end != std::string::npos && end > start) {
+                        currentPreset->command = unescapeJson(line.substr(start, end - start));
                     }
                 } else if ((pos = line.find("\"workingDir\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 13) + 1;
-                    size_t end = line.find("\"", start);
-                    if (start != std::string::npos && end != std::string::npos) {
-                        currentPreset->workingDir = line.substr(start, end - start);
+                    size_t end = line.rfind("\"");  // Last quote on line
+                    if (start != std::string::npos && end != std::string::npos && end > start) {
+                        currentPreset->workingDir = unescapeJson(line.substr(start, end - start));
                     }
                 } else if ((pos = line.find("\"selectedGpuUuids\":")) != std::string::npos) {
                     size_t start = line.find("\"", pos + 19) + 1;
-                    size_t end = line.find("\"", start);
+                    size_t end = line.rfind("\"");  // Last quote on line
                     if (start != std::string::npos && end != std::string::npos) {
                         currentPreset->selectedGpuUuids = line.substr(start, end - start);
                     }
@@ -111,6 +282,12 @@ void GpuMonitorUI::loadSettings() {
                     size_t start = pos + 15;
                     while (start < line.size() && (line[start] == ' ' || line[start] == ':')) start++;
                     currentConfig->displayOrder = std::atoi(line.c_str() + start);
+                } else if (line.find("\"cardOpen\":") != std::string::npos) {
+                    currentConfig->cardOpen = (line.find("true") != std::string::npos);
+                } else if (line.find("\"processesOpen\":") != std::string::npos) {
+                    currentConfig->processesOpen = (line.find("true") != std::string::npos);
+                } else if (line.find("\"commandsOpen\":") != std::string::npos) {
+                    currentConfig->commandsOpen = (line.find("true") != std::string::npos);
                 }
             }
         }
@@ -131,15 +308,18 @@ void GpuMonitorUI::saveSettings() {
 
     file << "{\n";
 
+    // Write global UI state
+    file << "  \"quickLaunchOpen\": " << (m_settings.quickLaunchOpen ? "true" : "false") << ",\n";
+
     // Write presets
     file << "  \"presets\": [\n";
     for (size_t i = 0; i < m_settings.presets.size(); i++) {
         const auto& preset = m_settings.presets[i];
         file << "    {\n";
         file << "      \"preset\": " << i << ",\n";
-        file << "      \"name\": \"" << preset.name << "\",\n";
-        file << "      \"command\": \"" << preset.command << "\",\n";
-        file << "      \"workingDir\": \"" << preset.workingDir << "\",\n";
+        file << "      \"name\": \"" << escapeJson(preset.name) << "\",\n";
+        file << "      \"command\": \"" << escapeJson(preset.command) << "\",\n";
+        file << "      \"workingDir\": \"" << escapeJson(preset.workingDir) << "\",\n";
         file << "      \"selectedGpuUuids\": \"" << preset.selectedGpuUuids << "\"\n";
         file << "    }" << (i < m_settings.presets.size() - 1 ? "," : "") << "\n";
     }
@@ -153,7 +333,10 @@ void GpuMonitorUI::saveSettings() {
         file << "      \"gpuConfig\": " << i << ",\n";
         file << "      \"uuid\": \"" << config.uuid << "\",\n";
         file << "      \"nickname\": \"" << config.nickname << "\",\n";
-        file << "      \"displayOrder\": " << config.displayOrder << "\n";
+        file << "      \"displayOrder\": " << config.displayOrder << ",\n";
+        file << "      \"cardOpen\": " << (config.cardOpen ? "true" : "false") << ",\n";
+        file << "      \"processesOpen\": " << (config.processesOpen ? "true" : "false") << ",\n";
+        file << "      \"commandsOpen\": " << (config.commandsOpen ? "true" : "false") << "\n";
         file << "    }" << (i < m_settings.gpuConfigs.size() - 1 ? "," : "") << "\n";
     }
     file << "  ]\n";
@@ -689,10 +872,19 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
         ImGui::BeginDisabled();
     }
 
-    if (ImGui::CollapsingHeader("Quick Launch", ImGuiTreeNodeFlags_DefaultOpen)) {
-        ImGui::Indent(10);
+    ImGui::SetNextItemOpen(m_settings.quickLaunchOpen, ImGuiCond_Once);
+    bool quickLaunchOpen = ImGui::CollapsingHeader(ICON_FA_ROCKET " Quick Launch");
+    if (quickLaunchOpen != m_settings.quickLaunchOpen) {
+        m_settings.quickLaunchOpen = quickLaunchOpen;
+        saveSettings();
+    }
+    if (quickLaunchOpen) {
+        ImGui::Indent(8);
+        ImGui::Spacing();
 
-        // Show existing presets
+        float availWidth = ImGui::GetContentRegionAvail().x;
+
+        // Show existing presets as cards
         for (size_t i = 0; i < m_settings.presets.size(); i++) {
             ImGui::PushID(static_cast<int>(i));
             auto& preset = m_settings.presets[i];
@@ -700,21 +892,57 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
             // Build GPU label from selected GPUs
             std::string gpuLabel;
             if (preset.selectedGpuUuids.empty()) {
-                gpuLabel = "ALL";
+                gpuLabel = "ALL GPUs";
             } else {
                 int count = 0;
                 for (const auto& gpu : gpuStats) {
                     if (isGpuSelectedInPreset(preset, gpu.uuid)) {
-                        if (count > 0) gpuLabel += ",";
+                        if (count > 0) gpuLabel += ", ";
                         gpuLabel += getGpuDisplayName(gpu);
                         count++;
                     }
                 }
-                if (gpuLabel.empty()) gpuLabel = "ALL";
+                if (gpuLabel.empty()) gpuLabel = "ALL GPUs";
             }
 
-            if (ImGui::Button(!preset.name.empty() ? preset.name.c_str() : "Unnamed")) {
-                // Launch the preset
+            // Get first line of command for preview
+            std::string cmdPreview;
+            if (!preset.command.empty()) {
+                size_t newlinePos = preset.command.find('\n');
+                cmdPreview = preset.command.substr(0, newlinePos);
+                if (cmdPreview.length() > 40) {
+                    cmdPreview = cmdPreview.substr(0, 37) + "...";
+                } else if (newlinePos != std::string::npos) {
+                    cmdPreview += " ...";
+                }
+            }
+
+            // Card background
+            ImVec2 cardStart = ImGui::GetCursorScreenPos();
+            float cardHeight = 52.0f;
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            drawList->AddRectFilled(
+                cardStart,
+                ImVec2(cardStart.x + availWidth - 8, cardStart.y + cardHeight),
+                ImGui::GetColorU32(ImVec4(0.15f, 0.15f, 0.18f, 1.0f)),
+                4.0f);
+
+            ImGui::BeginGroup();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 4);
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6);
+
+            // Calculate button widths
+            float buttonSpacing = 4.0f;
+            float smallBtnWidth = 32.0f;
+            float actionButtonsWidth = smallBtnWidth * 3 + buttonSpacing * 3 + 12;  // 3 buttons + spacing + padding
+            float launchBtnWidth = availWidth - actionButtonsWidth - 20;
+
+            // Launch button (prominent, colored)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.45f, 0.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.35f, 0.15f, 1.0f));
+            std::string launchLabel = std::string(ICON_FA_PLAY "  ") + (!preset.name.empty() ? preset.name : "Unnamed");
+            if (ImGui::Button(launchLabel.c_str(), ImVec2(launchBtnWidth, 22))) {
                 std::string gpuSel = buildGpuSelectionString(preset, gpuStats);
                 int result = Platform::executeCommand(preset.command, preset.workingDir,
                                                       gpuSel.empty() ? "" : "CUDA_VISIBLE_DEVICES", gpuSel);
@@ -724,33 +952,67 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                     showCopiedToast("Failed to launch");
                 }
             }
-            ImGui::SameLine();
-            ImGui::TextDisabled("[%s]", gpuLabel.c_str());
+            ImGui::PopStyleColor(3);
 
-            // Edit button
-            ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60);
-            if (ImGui::SmallButton("Edit")) {
+            // Action buttons on the right
+            ImGui::SameLine(0, buttonSpacing);
+            if (ImGui::Button(ICON_FA_PENCIL, ImVec2(smallBtnWidth, 22))) {
                 ImGui::OpenPopup("EditPreset");
             }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("X")) {
-                // Remove preset
-                m_settings.presets.erase(m_settings.presets.begin() + i);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Edit");
+
+            ImGui::SameLine(0, buttonSpacing);
+            if (ImGui::Button(ICON_FA_CLONE, ImVec2(smallBtnWidth, 22))) {
+                // Duplicate preset
+                QuickLaunchPreset newPreset = preset;
+                newPreset.name = preset.name + " (copy)";
+                m_settings.presets.insert(m_settings.presets.begin() + i + 1, newPreset);
                 saveSettings();
                 ImGui::PopID();
-                break;  // Iterator invalidated, exit loop
+                ImGui::EndGroup();
+                break;  // Iterator invalidated
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate");
+
+            ImGui::SameLine(0, buttonSpacing);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.2f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.25f, 0.25f, 1.0f));
+            if (ImGui::Button(ICON_FA_TRASH, ImVec2(smallBtnWidth, 22))) {
+                m_settings.presets.erase(m_settings.presets.begin() + i);
+                saveSettings();
+                ImGui::PopStyleColor(2);
+                ImGui::PopID();
+                ImGui::EndGroup();
+                break;  // Iterator invalidated
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Delete");
+            ImGui::PopStyleColor(2);
+
+            // Second row: GPU label and command preview
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 6);
+            ImGui::TextDisabled("%s", gpuLabel.c_str());
+            if (!cmdPreview.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("|");
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", cmdPreview.c_str());
             }
 
-            // Edit popup
+            ImGui::EndGroup();
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + cardHeight - 28);
+            ImGui::Spacing();
+
+            // Edit popup - constrain size
+            ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(400, 600));
             if (ImGui::BeginPopup("EditPreset")) {
-                ImGui::Text("Edit Preset");
+                ImGui::Text(ICON_FA_PENCIL " Edit Preset");
                 ImGui::Separator();
                 ImGui::Spacing();
 
                 InputTextString("Name", preset.name);
 
                 ImGui::Spacing();
-                ImGui::Text("GPUs:");
+                ImGui::Text(ICON_FA_MICROCHIP " GPUs:");
                 ImGui::SameLine();
                 ImGui::TextDisabled("(none = all)");
 
@@ -768,7 +1030,7 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 ImGui::Spacing();
                 InputTextString("Working Dir", preset.workingDir);
                 ImGui::SameLine();
-                if (ImGui::SmallButton("...")) {
+                if (ImGui::SmallButton(ICON_FA_FOLDER_OPEN)) {
                     std::string folder = Platform::browseForFolder("Select Working Directory");
                     if (!folder.empty()) {
                         preset.workingDir = folder;
@@ -776,14 +1038,20 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 }
 
                 ImGui::Spacing();
-                InputTextString("Command", preset.command);
-                ImGui::TextDisabled("(optional - runs after setting GPU)");
+                ImGui::Text(ICON_FA_TERMINAL " Command:");
+#ifdef _WIN32
+                constexpr const char* commandHint = "e.g.\n.\\venv\\Scripts\\activate.ps1\npython main.py --listen";
+#else
+                constexpr const char* commandHint = "e.g.\nsource venv/bin/activate\npython main.py --listen";
+#endif
+                InputTextMultilineWithHint("##command", commandHint,
+                    preset.command, "One command per line");
 
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                if (ImGui::Button("Done", ImVec2(80, 0))) {
+                if (ImGui::Button(ICON_FA_CHECK " Done", ImVec2(90, 0))) {
                     saveSettings();
                     ImGui::CloseCurrentPopup();
                 }
@@ -794,16 +1062,19 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
         }
 
         // Add new preset button
-        if (m_settings.presets.size() < 5) {
-            if (ImGui::Button("+ Add Preset")) {
+        if (m_settings.presets.size() < 10) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.25f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.3f, 0.45f, 1.0f));
+            if (ImGui::Button(ICON_FA_PLUS " Add Preset", ImVec2(availWidth - 8, 0))) {
                 QuickLaunchPreset preset;
                 preset.name = "New Preset";
                 m_settings.presets.push_back(std::move(preset));
                 saveSettings();
             }
+            ImGui::PopStyleColor(2);
         }
 
-        ImGui::Unindent(10);
+        ImGui::Unindent(8);
         ImGui::Spacing();
     }
 
@@ -828,7 +1099,7 @@ void GpuMonitorUI::renderProcessesSection(const GpuStats& stats) {
 
         // Kill button on the right
         ImGui::SameLine(ImGui::GetContentRegionAvail().x - 30);
-        if (ImGui::SmallButton("Kill")) {
+        if (ImGui::SmallButton(ICON_FA_SKULL)) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Kill Process";
@@ -875,7 +1146,7 @@ void GpuMonitorUI::render(const std::vector<GpuStats>& gpuStats, const SystemInf
 
     ImGui::Begin("GPU Monitor", nullptr, windowFlags);
 
-    ImGui::Text("GPU Monitor");
+    ImGui::Text(ICON_FA_MICROCHIP " GPU Monitor");
     ImGui::SameLine(ImGui::GetWindowWidth() - 100);
     ImGui::TextDisabled("%.0f FPS", io.Framerate);
     ImGui::Separator();
@@ -964,7 +1235,7 @@ void GpuMonitorUI::renderConfirmDialog() {
     if (ImGui::BeginPopupModal("Confirm Action", &m_confirmDialog.isOpen, ImGuiWindowFlags_AlwaysAutoResize)) {
         if (m_confirmDialog.isDangerous) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
-            ImGui::Text("WARNING: This action may require admin privileges");
+            ImGui::Text(ICON_FA_TRIANGLE_EXCLAMATION " WARNING: This action may require admin privileges");
             ImGui::PopStyleColor();
             ImGui::Spacing();
         }
@@ -975,7 +1246,7 @@ void GpuMonitorUI::renderConfirmDialog() {
         ImGui::Spacing();
 
         // Command preview
-        ImGui::Text("Command:");
+        ImGui::Text(ICON_FA_TERMINAL " Command:");
         ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.1f, 1.0f));
         ImGui::InputTextMultiline("##cmd", const_cast<char*>(m_confirmDialog.command.c_str()),
             m_confirmDialog.command.size() + 1, ImVec2(-1, 60),
@@ -986,14 +1257,14 @@ void GpuMonitorUI::renderConfirmDialog() {
         ImGui::Separator();
         ImGui::Spacing();
 
-        if (ImGui::Button("Copy Command", ImVec2(120, 0))) {
+        if (ImGui::Button(ICON_FA_COPY " Copy Command", ImVec2(140, 0))) {
             copyToClipboard(m_confirmDialog.command);
             showCopiedToast("Command");
             m_confirmDialog.isOpen = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (ImGui::Button("Cancel", ImVec2(80, 0))) {
+        if (ImGui::Button(ICON_FA_XMARK " Cancel", ImVec2(90, 0))) {
             m_confirmDialog.isOpen = false;
             ImGui::CloseCurrentPopup();
         }
@@ -1101,7 +1372,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     if (ImGui::BeginPopup(popupId.c_str())) {
         GpuConfig* config = getOrCreateGpuConfig(stats.uuid);
         if (config) {
-            ImGui::Text("Rename GPU:");
+            ImGui::Text(ICON_FA_PEN " Rename GPU:");
             ImGui::SetNextItemWidth(200);
 
             if (cardState.focusNickname) {
@@ -1117,7 +1388,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
             }
 
             ImGui::SameLine();
-            if (ImGui::SmallButton("OK")) {
+            if (ImGui::SmallButton(ICON_FA_CHECK)) {
                 saveSettings();
                 ImGui::CloseCurrentPopup();
             }
@@ -1129,15 +1400,18 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     ImGui::SameLine();
     ImGui::TextDisabled("cuda:%u", stats.cudaIndex);
 
+    // Get or create GPU config for persistent state
+    GpuConfig* gpuConfig = getOrCreateGpuConfig(stats.uuid);
+
     // Collapse/Expand button (right-aligned)
     ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20);
-    std::string collapseId = "##collapse_" + stats.uuid;
-    if (ImGui::SmallButton(cardState.collapsed ? "+" : "-")) {
-        cardState.collapsed = !cardState.collapsed;
+    if (ImGui::SmallButton(gpuConfig->cardOpen ? ICON_FA_CHEVRON_UP : ICON_FA_CHEVRON_DOWN)) {
+        gpuConfig->cardOpen = !gpuConfig->cardOpen;
+        saveSettings();
     }
     if (ImGui::IsItemHovered()) {
         ImGui::BeginTooltip();
-        ImGui::TextUnformatted(cardState.collapsed ? "Expand" : "Collapse");
+        ImGui::TextUnformatted(gpuConfig->cardOpen ? "Collapse" : "Expand");
         ImGui::EndTooltip();
     }
 
@@ -1158,7 +1432,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     history.addSample(deltaTime, vramFrac, gpuUtilFrac, powerFrac, coreClockFrac, memClockFrac, tempFrac, fanFrac);
 
     // Collapsed view: compact visual indicators in a single row
-    if (cardState.collapsed) {
+    if (!gpuConfig->cardOpen) {
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         float rowHeight = 16.0f;
@@ -1568,12 +1842,18 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
     ImGui::Spacing();
 
     // Processes section (collapsible) - disabled during drag
-    std::string procHeader = "Processes (" + std::to_string(stats.processes.size()) + ")";
+    std::string procHeader = std::string(ICON_FA_GEARS) + " Processes (" + std::to_string(stats.processes.size()) + ")";
     if (isDragging) {
         // Show as non-interactive text during drag
         ImGui::TextDisabled("> %s", procHeader.c_str());
     } else {
-        if (ImGui::CollapsingHeader(procHeader.c_str())) {
+        ImGui::SetNextItemOpen(gpuConfig->processesOpen, ImGuiCond_Once);
+        bool processesOpen = ImGui::CollapsingHeader(procHeader.c_str());
+        if (processesOpen != gpuConfig->processesOpen) {
+            gpuConfig->processesOpen = processesOpen;
+            saveSettings();
+        }
+        if (processesOpen) {
             ImGui::Indent(10);
             renderProcessesSection(stats);
             ImGui::Unindent(10);
@@ -1582,9 +1862,15 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
 
     // Commands section (collapsible) - disabled during drag
     if (isDragging) {
-        ImGui::TextDisabled("> Commands");
+        ImGui::TextDisabled("> " ICON_FA_TERMINAL " Commands");
     } else {
-        if (ImGui::CollapsingHeader("Commands")) {
+        ImGui::SetNextItemOpen(gpuConfig->commandsOpen, ImGuiCond_Once);
+        bool commandsOpen = ImGui::CollapsingHeader(ICON_FA_TERMINAL " Commands");
+        if (commandsOpen != gpuConfig->commandsOpen) {
+            gpuConfig->commandsOpen = commandsOpen;
+            saveSettings();
+        }
+        if (commandsOpen) {
             renderCommandsSection(stats, allStats);
         }
     }
@@ -1615,19 +1901,19 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     std::string displayName = getGpuDisplayName(stats);
 
     // === CUDA_VISIBLE_DEVICES Section ===
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "CUDA Device Selection");
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), ICON_FA_MICROCHIP " CUDA Device Selection");
     ImGui::Spacing();
 
     // Use only this GPU
     {
         std::string idx = std::to_string(stats.cudaIndex);
         std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + idx + "\"";
-        if (ImGui::Button("Use Only This GPU")) {
+        if (ImGui::Button(ICON_FA_MICROCHIP " Use Only This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("CUDA_VISIBLE_DEVICES");
         }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Open Terminal##only")) {
+        if (ImGui::SmallButton(ICON_FA_TERMINAL "##only")) {
             openTerminalWithGpu(idx, displayName);
         }
         ImGui::SameLine();
@@ -1640,12 +1926,12 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
         if (!tccIndices.empty() && tccIndices.find(',') != std::string::npos) {
             // Only show if there are multiple TCC GPUs
             std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + tccIndices + "\"";
-            if (ImGui::Button("Use All TCC GPUs")) {
+            if (ImGui::Button(ICON_FA_MICROCHIP " Use All TCC GPUs")) {
                 copyToClipboard(cmd);
                 showCopiedToast("TCC GPUs");
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("Open Terminal##tcc")) {
+            if (ImGui::SmallButton(ICON_FA_TERMINAL "##tcc")) {
                 openTerminalWithGpu(tccIndices, "TCC Compute GPUs");
             }
             ImGui::SameLine();
@@ -1657,12 +1943,12 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     {
         std::string otherIndices = buildExcludeDevices(allStats, stats.cudaIndex);
         std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + otherIndices + "\"";
-        if (ImGui::Button("Exclude This GPU")) {
+        if (ImGui::Button(ICON_FA_BAN " Exclude This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("Exclude GPU");
         }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Open Terminal##exclude")) {
+        if (ImGui::SmallButton(ICON_FA_TERMINAL "##exclude")) {
             openTerminalWithGpu(otherIndices, "Excluding " + displayName);
         }
         ImGui::SameLine();
@@ -1674,16 +1960,16 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     ImGui::Spacing();
 
     // === Quick Copy Section ===
-    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "Quick Copy");
+    ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), ICON_FA_COPY " Quick Copy");
     ImGui::Spacing();
 
-    if (ImGui::Button("Bus ID")) {
+    if (ImGui::Button(ICON_FA_CLIPBOARD " Bus ID")) {
         copyToClipboard(stats.pciBusId);
         showCopiedToast("Bus ID");
     }
     ImGui::SameLine();
 
-    if (ImGui::Button("CUDA Index")) {
+    if (ImGui::Button(ICON_FA_CLIPBOARD " CUDA Index")) {
         copyToClipboard(std::to_string(stats.cudaIndex));
         showCopiedToast("CUDA Index");
     }
@@ -1692,7 +1978,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // nvidia-smi for this GPU
     {
         std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex);
-        if (ImGui::Button("nvidia-smi")) {
+        if (ImGui::Button(ICON_FA_GAUGE " nvidia-smi")) {
             copyToClipboard(cmd);
             showCopiedToast("nvidia-smi command");
         }
@@ -1703,7 +1989,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     ImGui::Spacing();
 
     // === Management Section (with confirmations) ===
-    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Management (Admin Required)");
+    ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), ICON_FA_SCREWDRIVER_WRENCH " Management (Admin Required)");
     ImGui::Spacing();
 
     // Toggle TCC/WDDM
@@ -1730,7 +2016,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Reset GPU
     {
         std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " --gpu-reset";
-        if (ImGui::Button("Reset GPU")) {
+        if (ImGui::Button(ICON_FA_ROTATE " Reset GPU")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Reset GPU";
@@ -1741,7 +2027,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     }
 
     // Power limit options
-    ImGui::Text("Power Limit:");
+    ImGui::Text(ICON_FA_BOLT " Power Limit:");
     ImGui::SameLine();
 
     const unsigned int powerPresets[] = {200, 250, 300};
@@ -1768,7 +2054,7 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
             " --query-compute-apps=pid --format=csv,noheader) | "
             "ForEach-Object { Stop-Process -Id $_ -Force }";
 
-        if (ImGui::Button("Kill All Processes")) {
+        if (ImGui::Button(ICON_FA_SKULL " Kill All Processes")) {
             m_confirmDialog.isOpen = true;
             m_confirmDialog.isDangerous = true;
             m_confirmDialog.title = "Kill GPU Processes";

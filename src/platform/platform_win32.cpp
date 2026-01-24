@@ -61,13 +61,29 @@ int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
     return (reinterpret_cast<intptr_t>(result) > 32) ? 0 : static_cast<int>(reinterpret_cast<intptr_t>(result));
 }
 
+std::string normalizeCommand(const std::string& cmd) {
+    std::string result = cmd;
+    // Replace \r\n first, then remaining \n, with "; " for PowerShell
+    size_t pos = 0;
+    while ((pos = result.find("\r\n", pos)) != std::string::npos) {
+        result.replace(pos, 2, "; ");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = result.find('\n', pos)) != std::string::npos) {
+        result.replace(pos, 1, "; ");
+        pos += 2;
+    }
+    return result;
+}
+
 int executeCommand(const std::string& cmd, const std::string& workingDir,
                    const std::string& envName, const std::string& envValue) {
     std::string psCommand;
     if (!envName.empty()) {
         psCommand = "$env:" + envName + "='" + envValue + "'; ";
     }
-    psCommand += cmd;
+    psCommand += normalizeCommand(cmd);
 
     std::string args = "-NoExit -Command \"" + psCommand + "\"";
     const char* workDir = workingDir.empty() ? nullptr : workingDir.c_str();

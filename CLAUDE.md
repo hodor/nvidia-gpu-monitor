@@ -133,13 +133,37 @@ When making changes to this project:
 - **New UI elements**: Add to `ui.cpp`, follow existing card/section patterns
 - **Platform code**: Implement in both `platform_win32.cpp` and `platform_linux.cpp`
 
+### Cross-Platform Build Verification
+
+**IMPORTANT**: Always build and verify on Linux FIRST, then Windows. GCC on Linux has stricter warnings that catch issues MSVC misses.
+
+**Step 1: Build on Linux via WSL (must have zero warnings)**
+```bash
+# First time setup - create separate build directory for Linux
+wsl -d Ubuntu bash -c "cd /mnt/f/gpu_review/gpu_monitor && rm -rf build_linux && mkdir build_linux && cmake -B build_linux -DCMAKE_BUILD_TYPE=Release && cmake --build build_linux"
+
+# Subsequent builds
+wsl -d Ubuntu bash -c "cd /mnt/f/gpu_review/gpu_monitor && cmake --build build_linux"
+```
+
+**Step 2: Build on Windows (after Linux passes)**
+```powershell
+cmake --build build --config Release
+```
+
+Fix ALL warnings before proceeding. Common issues GCC catches:
+- Unused variables
+- Buffer size warnings with `snprintf`
+- Sign comparison warnings
+- Missing return statements
+
 ### Before Committing to Main
 1. **Update CHANGELOG.md** - Add your changes under `[Unreleased]` section using Keep a Changelog format:
    - `Added` for new features
    - `Changed` for changes in existing functionality
    - `Fixed` for bug fixes
    - `Removed` for removed features
-2. Verify the build works: `cmake -B build && cmake --build build`
+2. **Build on both platforms with zero warnings** (see Cross-Platform Build Verification above)
 3. Test on at least one platform
 
 ### Commit Messages

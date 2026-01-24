@@ -4,6 +4,8 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "IconsFontAwesome6.h"
+#include "fa_solid_900_compressed.h"
 
 #include <GLFW/glfw3.h>
 #include <cstdio>
@@ -38,12 +40,25 @@ int main(int /*argc*/, char** /*argv*/) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+    // Load fonts - default font + FontAwesome icons (embedded)
+    io.Fonts->AddFontDefault();
+    ImFontConfig config;
+    config.MergeMode = true;
+    config.GlyphMinAdvanceX = 13.0f;  // Monospace icons
+    static const ImWchar icon_ranges[] = { ICON_MIN_FA, ICON_MAX_16_FA, 0 };
+    io.Fonts->AddFontFromMemoryCompressedTTF(fa_solid_900_compressed_data, fa_solid_900_compressed_size, 13.0f, &config, icon_ranges);
+
     // Setup Dear ImGui style
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 6.0f;
     style.FrameRounding = 4.0f;
     style.GrabRounding = 4.0f;
+
+    // Subtle dark headers that blend with the app
+    style.Colors[ImGuiCol_Header]        = ImVec4(0.18f, 0.18f, 0.20f, 1.0f);
+    style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.22f, 0.25f, 1.0f);
+    style.Colors[ImGuiCol_HeaderActive]  = ImVec4(0.25f, 0.25f, 0.28f, 1.0f);
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForOpenGL(window, true);

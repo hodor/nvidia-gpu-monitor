@@ -23,9 +23,15 @@ int openTerminalWithEnv(const std::string& envName, const std::string& envValue,
                         const std::string& label, const std::string& workingDir = "");
 
 // Execute a command with optional environment variable and working directory
+// Newlines in cmd are converted to shell-appropriate separators (; for PowerShell, && for bash)
 // Returns: 0 on success, -1 if process couldn't start, 127 if shell not found, or command exit code
 int executeCommand(const std::string& cmd, const std::string& workingDir = "",
                    const std::string& envName = "", const std::string& envValue = "");
+
+// Convert multiline command to shell-appropriate single-line format
+// Windows: \r\n and \n become "; " (PowerShell)
+// Linux: \n becomes " && " (bash)
+std::string normalizeCommand(const std::string& cmd);
 
 // Terminate a process by PID
 // Returns true on success
