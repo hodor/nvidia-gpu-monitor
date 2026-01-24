@@ -17,30 +17,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Labels: GPU Monitor title, CUDA Device Selection, Quick Copy, Management
   - Warning indicators with triangle exclamation icon
 - Embedded font in executable (no external font file needed)
+- Multiline command input for Quick Launch presets
+  - Line numbers displayed in gutter
+  - Platform-specific normalization (PowerShell `;` / Bash `&&`)
+  - JSON escaping for persistence
 - Persistent collapse state for all UI sections
   - GPU cards remember expanded/collapsed state
   - Quick Launch section state persists
   - Per-GPU Processes and Commands sections persist
+- Card-style layout for Quick Launch presets
+- Duplicate button for presets
+- Custom colors for Quick Launch presets (button and card background)
 
 ### Changed
 
 - CollapsingHeader styling to subtle dark theme for visual consistency
-- Quick Launch preset buttons now use icons instead of text ("...", "++", "x")
+- Quick Launch preset buttons now use icons instead of text
 - All collapsible sections start collapsed by default
-
-## [0.1.1] - 2025-01-22
-
-### Added
-
-- Multiline command input for Quick Launch presets with line numbers
-- Platform-specific command normalization (PowerShell `;` / Bash `&&`)
-- Card-style layout for Quick Launch presets
-- Duplicate button for presets
-
-### Fixed
-
-- JSON escaping for multiline commands in settings persistence
-- Line number alignment with text in command input
 
 ## [0.1.0] - 2025-01-18
 
@@ -73,6 +66,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dear ImGui-based UI (docking branch)
 
 [Unreleased]: https://github.com/yourusername/gpu_monitor/compare/v0.1.2...HEAD
-[0.1.2]: https://github.com/yourusername/gpu_monitor/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/yourusername/gpu_monitor/compare/v0.1.0...v0.1.1
+[0.1.2]: https://github.com/yourusername/gpu_monitor/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/yourusername/gpu_monitor/releases/tag/v0.1.0

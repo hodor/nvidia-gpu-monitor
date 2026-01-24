@@ -34,6 +34,9 @@ struct QuickLaunchPreset {
     std::string workingDir;
     // GPU selection stored as comma-separated UUIDs (empty = all GPUs)
     std::string selectedGpuUuids;
+    // Custom colors (0-1 range, negative = use default)
+    float buttonColor[3] = {-1.0f, -1.0f, -1.0f};  // RGB for play button
+    float cardColor[3] = {-1.0f, -1.0f, -1.0f};    // RGB for card background
 };
 
 // Global settings

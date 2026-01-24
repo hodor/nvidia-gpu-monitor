@@ -6,6 +6,7 @@
 #include <ranges>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <filesystem>
 
 namespace fs = std::filesystem;
@@ -255,6 +256,27 @@ void GpuMonitorUI::loadSettings() {
                     if (start != std::string::npos && end != std::string::npos) {
                         currentPreset->selectedGpuUuids = line.substr(start, end - start);
                     }
+                } else if ((pos = line.find("\"buttonColor\":")) != std::string::npos) {
+                    size_t start = line.find("[", pos);
+                    if (start != std::string::npos) {
+                        // Parse [r, g, b] format using stringstream
+                        std::string colorStr = line.substr(start + 1);
+                        std::istringstream iss(colorStr);
+                        char comma;
+                        iss >> currentPreset->buttonColor[0] >> comma
+                            >> currentPreset->buttonColor[1] >> comma
+                            >> currentPreset->buttonColor[2];
+                    }
+                } else if ((pos = line.find("\"cardColor\":")) != std::string::npos) {
+                    size_t start = line.find("[", pos);
+                    if (start != std::string::npos) {
+                        std::string colorStr = line.substr(start + 1);
+                        std::istringstream iss(colorStr);
+                        char comma;
+                        iss >> currentPreset->cardColor[0] >> comma
+                            >> currentPreset->cardColor[1] >> comma
+                            >> currentPreset->cardColor[2];
+                    }
                 }
             }
         }
@@ -320,7 +342,9 @@ void GpuMonitorUI::saveSettings() {
         file << "      \"name\": \"" << escapeJson(preset.name) << "\",\n";
         file << "      \"command\": \"" << escapeJson(preset.command) << "\",\n";
         file << "      \"workingDir\": \"" << escapeJson(preset.workingDir) << "\",\n";
-        file << "      \"selectedGpuUuids\": \"" << preset.selectedGpuUuids << "\"\n";
+        file << "      \"selectedGpuUuids\": \"" << preset.selectedGpuUuids << "\",\n";
+        file << "      \"buttonColor\": [" << preset.buttonColor[0] << ", " << preset.buttonColor[1] << ", " << preset.buttonColor[2] << "],\n";
+        file << "      \"cardColor\": [" << preset.cardColor[0] << ", " << preset.cardColor[1] << ", " << preset.cardColor[2] << "]\n";
         file << "    }" << (i < m_settings.presets.size() - 1 ? "," : "") << "\n";
     }
     file << "  ],\n";
@@ -917,14 +941,17 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
                 }
             }
 
-            // Card background
+            // Card background (use custom color if set, otherwise default)
             ImVec2 cardStart = ImGui::GetCursorScreenPos();
             float cardHeight = 52.0f;
             ImDrawList* drawList = ImGui::GetWindowDrawList();
+            ImVec4 cardBgColor = (preset.cardColor[0] >= 0)
+                ? ImVec4(preset.cardColor[0], preset.cardColor[1], preset.cardColor[2], 1.0f)
+                : ImVec4(0.15f, 0.15f, 0.18f, 1.0f);
             drawList->AddRectFilled(
                 cardStart,
                 ImVec2(cardStart.x + availWidth - 8, cardStart.y + cardHeight),
-                ImGui::GetColorU32(ImVec4(0.15f, 0.15f, 0.18f, 1.0f)),
+                ImGui::GetColorU32(cardBgColor),
                 4.0f);
 
             ImGui::BeginGroup();
@@ -937,10 +964,16 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
             float actionButtonsWidth = smallBtnWidth * 3 + buttonSpacing * 3 + 12;  // 3 buttons + spacing + padding
             float launchBtnWidth = availWidth - actionButtonsWidth - 20;
 
-            // Launch button (prominent, colored)
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.45f, 0.2f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.55f, 0.25f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.35f, 0.15f, 1.0f));
+            // Launch button (use custom color if set, otherwise default green)
+            ImVec4 btnColor = (preset.buttonColor[0] >= 0)
+                ? ImVec4(preset.buttonColor[0], preset.buttonColor[1], preset.buttonColor[2], 1.0f)
+                : ImVec4(0.2f, 0.45f, 0.2f, 1.0f);
+            auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); };
+            ImVec4 btnHover = ImVec4(clamp01(btnColor.x + 0.05f), clamp01(btnColor.y + 0.1f), clamp01(btnColor.z + 0.05f), 1.0f);
+            ImVec4 btnActive = ImVec4(clamp01(btnColor.x - 0.05f), clamp01(btnColor.y - 0.1f), clamp01(btnColor.z - 0.05f), 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, btnColor);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, btnHover);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, btnActive);
             std::string launchLabel = std::string(ICON_FA_PLAY "  ") + (!preset.name.empty() ? preset.name : "Unnamed");
             if (ImGui::Button(launchLabel.c_str(), ImVec2(launchBtnWidth, 22))) {
                 std::string gpuSel = buildGpuSelectionString(preset, gpuStats);
@@ -1046,6 +1079,49 @@ void GpuMonitorUI::renderQuickLaunch(const std::vector<GpuStats>& gpuStats) {
 #endif
                 InputTextMultilineWithHint("##command", commandHint,
                     preset.command, "One command per line");
+
+                ImGui::Spacing();
+                ImGui::Text(ICON_FA_PALETTE " Colors:");
+
+                // Button color picker with reset option
+                bool hasButtonColor = preset.buttonColor[0] >= 0;
+                float btnColorEdit[3] = {
+                    hasButtonColor ? preset.buttonColor[0] : 0.2f,
+                    hasButtonColor ? preset.buttonColor[1] : 0.45f,
+                    hasButtonColor ? preset.buttonColor[2] : 0.2f
+                };
+                if (ImGui::ColorEdit3("Button", btnColorEdit, ImGuiColorEditFlags_NoInputs)) {
+                    preset.buttonColor[0] = btnColorEdit[0];
+                    preset.buttonColor[1] = btnColorEdit[1];
+                    preset.buttonColor[2] = btnColorEdit[2];
+                }
+                if (hasButtonColor) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(ICON_FA_XMARK "##resetBtn")) {
+                        preset.buttonColor[0] = preset.buttonColor[1] = preset.buttonColor[2] = -1.0f;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default");
+                }
+
+                // Card color picker with reset option
+                bool hasCardColor = preset.cardColor[0] >= 0;
+                float cardColorEdit[3] = {
+                    hasCardColor ? preset.cardColor[0] : 0.15f,
+                    hasCardColor ? preset.cardColor[1] : 0.15f,
+                    hasCardColor ? preset.cardColor[2] : 0.18f
+                };
+                if (ImGui::ColorEdit3("Card", cardColorEdit, ImGuiColorEditFlags_NoInputs)) {
+                    preset.cardColor[0] = cardColorEdit[0];
+                    preset.cardColor[1] = cardColorEdit[1];
+                    preset.cardColor[2] = cardColorEdit[2];
+                }
+                if (hasCardColor) {
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(ICON_FA_XMARK "##resetCard")) {
+                        preset.cardColor[0] = preset.cardColor[1] = preset.cardColor[2] = -1.0f;
+                    }
+                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Reset to default");
+                }
 
                 ImGui::Spacing();
                 ImGui::Separator();
