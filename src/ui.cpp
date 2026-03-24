@@ -1540,9 +1540,14 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         drawList->AddText(ImVec2(curX, startPos.y), vramColor, vramStr);
         curX += ImGui::CalcTextSize(vramStr).x + 10.0f;
 
-        // GPU mini bar with 4-color health
-        int gpuHealth = getVramHealth(gpuUtilFrac);  // Same thresholds as VRAM
-        ImU32 gpuColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(gpuHealth));
+        // GPU mini bar with health color (high utilization is expected)
+        int gpuHealth = getMetricHealth(gpuUtilFrac);
+        ImVec4 gpuHealthColors[] = {
+            ImVec4(0.3f, 0.85f, 0.3f, 1.0f),   // Green
+            ImVec4(0.95f, 0.75f, 0.2f, 1.0f),   // Yellow
+            ImVec4(0.95f, 0.3f, 0.3f, 1.0f)     // Red
+        };
+        ImU32 gpuColor = ImGui::ColorConvertFloat4ToU32(gpuHealthColors[gpuHealth]);
         drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "G");
         curX += 12.0f;
         drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),

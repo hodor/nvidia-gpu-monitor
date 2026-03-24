@@ -80,7 +80,7 @@ int main(int /*argc*/, char** /*argv*/) {
     // Main loop
     ImVec4 clearColor = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
 
-    constexpr double targetFrameTime = 1.0 / 120.0;
+    constexpr double targetFrameTime = 1.0 / 60.0;
 
     while (!glfwWindowShouldClose(window)) {
         double frameStart = glfwGetTime();
