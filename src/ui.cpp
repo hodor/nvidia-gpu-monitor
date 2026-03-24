@@ -1524,8 +1524,8 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         // VRAM mini bar with 4-color health
         int vramHealth = getVramHealth(vramFrac);
         ImU32 vramColor = ImGui::ColorConvertFloat4ToU32(getHealthColor4(vramHealth));
-        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "V");
-        curX += 12.0f;
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "RAM");
+        curX += ImGui::CalcTextSize("RAM").x + 4.0f;
         drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
             IM_COL32(30, 30, 35, 255), 2.0f);
         if (vramFrac > 0.01f) {
@@ -1536,7 +1536,7 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
             IM_COL32(50, 50, 55, 255), 2.0f);
         curX += barWidth + 3.0f;
         char vramStr[16];
-        snprintf(vramStr, sizeof(vramStr), "%d%%", static_cast<int>(vramFrac * 100.0f + 0.5f));
+        snprintf(vramStr, sizeof(vramStr), "%.1f/%.1fG", vramUsedGB, vramTotalGB);
         drawList->AddText(ImVec2(curX, startPos.y), vramColor, vramStr);
         curX += ImGui::CalcTextSize(vramStr).x + 10.0f;
 
@@ -1548,8 +1548,8 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
             ImVec4(0.95f, 0.3f, 0.3f, 1.0f)     // Red
         };
         ImU32 gpuColor = ImGui::ColorConvertFloat4ToU32(gpuHealthColors[gpuHealth]);
-        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "G");
-        curX += 12.0f;
+        drawList->AddText(ImVec2(curX, startPos.y), IM_COL32(120, 120, 120, 255), "GPU");
+        curX += ImGui::CalcTextSize("GPU").x + 4.0f;
         drawList->AddRectFilled(ImVec2(curX, barY), ImVec2(curX + barWidth, barY + barHeight),
             IM_COL32(30, 30, 35, 255), 2.0f);
         if (gpuUtilFrac > 0.01f) {
