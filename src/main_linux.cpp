@@ -9,6 +9,8 @@
 
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#include <thread>
+#include <chrono>
 
 static void glfw_error_callback(int error, const char* description) {
     fprintf(stderr, "GLFW Error %d: %s\n", error, description);
@@ -78,7 +80,11 @@ int main(int /*argc*/, char** /*argv*/) {
     // Main loop
     ImVec4 clearColor = ImVec4(0.1f, 0.1f, 0.12f, 1.0f);
 
+    constexpr double targetFrameTime = 1.0 / 120.0;
+
     while (!glfwWindowShouldClose(window)) {
+        double frameStart = glfwGetTime();
+
         glfwPollEvents();
 
         // Start the Dear ImGui frame
@@ -102,6 +108,13 @@ int main(int /*argc*/, char** /*argv*/) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
         glfwSwapBuffers(window);
+
+        // Frame rate cap (fallback when VSync is unavailable)
+        double elapsed = glfwGetTime() - frameStart;
+        if (elapsed < targetFrameTime) {
+            std::this_thread::sleep_for(
+                std::chrono::duration<double>(targetFrameTime - elapsed));
+        }
     }
 
     // Cleanup
