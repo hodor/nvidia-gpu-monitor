@@ -1472,7 +1472,11 @@ void GpuMonitorUI::renderGpuCard(const GpuStats& stats, const std::vector<GpuSta
         ImGui::EndPopup();
     }
 
+#ifdef _WIN32
     renderBadge(stats.isTCC ? "TCC" : "WDDM", stats.isTCC);
+#else
+    renderBadge(stats.persistenceMode ? "Persist" : "No Persist", stats.persistenceMode);
+#endif
     ImGui::SameLine();
     ImGui::TextDisabled("cuda:%u", stats.cudaIndex);
 
@@ -2080,7 +2084,8 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), ICON_FA_SCREWDRIVER_WRENCH " Management (Admin Required)");
     ImGui::Spacing();
 
-    // Toggle TCC/WDDM
+#ifdef _WIN32
+    // Toggle TCC/WDDM (Windows only)
     {
         std::string targetMode = stats.isTCC ? "WDDM" : "TCC";
         std::string currentMode = stats.isTCC ? "TCC" : "WDDM";
@@ -2098,8 +2103,28 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
             m_confirmDialog.command = cmd;
         }
     }
-
     ImGui::SameLine();
+#else
+    // Toggle Persistence Mode (Linux only)
+    {
+        std::string targetState = stats.persistenceMode ? "Disable" : "Enable";
+        int modeValue = stats.persistenceMode ? 0 : 1;
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) + " -pm " + std::to_string(modeValue);
+
+        std::string btnLabel = targetState + " Persistence";
+        if (ImGui::Button(btnLabel.c_str())) {
+            m_confirmDialog.isOpen = true;
+            m_confirmDialog.isDangerous = false;
+            m_confirmDialog.title = "Toggle Persistence Mode";
+            m_confirmDialog.message = "This will " + targetState + " persistence mode for GPU " +
+                std::to_string(stats.cudaIndex) + " (" + displayName + ").\n\n"
+                "When enabled, the NVIDIA driver stays loaded even with no active clients, "
+                "reducing startup latency for CUDA programs.";
+            m_confirmDialog.command = cmd;
+        }
+    }
+    ImGui::SameLine();
+#endif
 
     // Reset GPU
     {
@@ -2137,10 +2162,14 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
 
     // Kill processes on this GPU
     {
-        // This uses a PowerShell one-liner to find and kill processes
+#ifdef _WIN32
         std::string cmd = "(nvidia-smi -i " + std::to_string(stats.cudaIndex) +
             " --query-compute-apps=pid --format=csv,noheader) | "
             "ForEach-Object { Stop-Process -Id $_ -Force }";
+#else
+        std::string cmd = "nvidia-smi -i " + std::to_string(stats.cudaIndex) +
+            " --query-compute-apps=pid --format=csv,noheader | xargs -r kill -9";
+#endif
 
         if (ImGui::Button(ICON_FA_SKULL " Kill All Processes")) {
             m_confirmDialog.isOpen = true;

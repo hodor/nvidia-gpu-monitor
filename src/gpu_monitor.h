@@ -28,6 +28,7 @@ struct GpuStats {
     std::string uuid;          // Unique GPU identifier (for settings key)
     std::string pciBusId;      // Physical slot (for default sort order)
     bool isTCC;
+    bool persistenceMode;      // Linux: whether persistence mode is enabled
     unsigned int cudaIndex;    // CUDA device index
 
     // Memory

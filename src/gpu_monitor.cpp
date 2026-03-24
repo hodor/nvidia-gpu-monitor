@@ -96,11 +96,17 @@ void GpuMonitor::updateStats() {
             stats.pciBusId = pci.busId;
         }
 
-        // Driver model (TCC vs WDDM)
+        // Driver model (TCC vs WDDM) - Windows only
         // NVML_DRIVER_WDDM = 0 (display), NVML_DRIVER_WDM = 1 (TCC/compute)
         nvmlDriverModel_t current, pending;
         if (nvmlDeviceGetDriverModel(device, &current, &pending) == NVML_SUCCESS) {
             stats.isTCC = (current == NVML_DRIVER_WDM);
+        }
+
+        // Persistence mode (Linux only, but query is safe on all platforms)
+        nvmlEnableState_t pmMode;
+        if (nvmlDeviceGetPersistenceMode(device, &pmMode) == NVML_SUCCESS) {
+            stats.persistenceMode = (pmMode == NVML_FEATURE_ENABLED);
         }
 
         // Memory
