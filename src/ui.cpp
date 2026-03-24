@@ -1983,7 +1983,11 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Use only this GPU
     {
         std::string idx = std::to_string(stats.cudaIndex);
+#ifdef _WIN32
         std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + idx + "\"";
+#else
+        std::string cmd = "export CUDA_VISIBLE_DEVICES=" + idx;
+#endif
         if (ImGui::Button(ICON_FA_MICROCHIP " Use Only This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("CUDA_VISIBLE_DEVICES");
@@ -2001,7 +2005,11 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
         std::string tccIndices = buildNvlinkPair(allStats);
         if (!tccIndices.empty() && tccIndices.find(',') != std::string::npos) {
             // Only show if there are multiple TCC GPUs
+#ifdef _WIN32
             std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + tccIndices + "\"";
+#else
+            std::string cmd = "export CUDA_VISIBLE_DEVICES=" + tccIndices;
+#endif
             if (ImGui::Button(ICON_FA_MICROCHIP " Use All TCC GPUs")) {
                 copyToClipboard(cmd);
                 showCopiedToast("TCC GPUs");
@@ -2018,7 +2026,11 @@ void GpuMonitorUI::renderCommandsSection(const GpuStats& stats, const std::vecto
     // Exclude this GPU
     {
         std::string otherIndices = buildExcludeDevices(allStats, stats.cudaIndex);
+#ifdef _WIN32
         std::string cmd = "$env:CUDA_VISIBLE_DEVICES=\"" + otherIndices + "\"";
+#else
+        std::string cmd = "export CUDA_VISIBLE_DEVICES=" + otherIndices;
+#endif
         if (ImGui::Button(ICON_FA_BAN " Exclude This GPU")) {
             copyToClipboard(cmd);
             showCopiedToast("Exclude GPU");

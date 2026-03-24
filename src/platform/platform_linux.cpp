@@ -19,14 +19,19 @@ std::string getSettingsDirectory() {
 }
 
 void copyToClipboard(const std::string& text) {
-    // Try xclip first, fall back to xsel
-    FILE* pipe = popen("xclip -selection clipboard 2>/dev/null", "w");
-    if (!pipe) {
-        pipe = popen("xsel --clipboard --input 2>/dev/null", "w");
-    }
-    if (pipe) {
-        fwrite(text.c_str(), 1, text.size(), pipe);
-        pclose(pipe);
+    // Try wl-copy (Wayland), xclip, then xsel (X11)
+    const char* commands[] = {
+        "wl-copy 2>/dev/null",
+        "xclip -selection clipboard 2>/dev/null",
+        "xsel --clipboard --input 2>/dev/null"
+    };
+
+    for (const char* cmd : commands) {
+        FILE* pipe = popen(cmd, "w");
+        if (pipe) {
+            fwrite(text.c_str(), 1, text.size(), pipe);
+            if (pclose(pipe) == 0) return;
+        }
     }
 }
 
