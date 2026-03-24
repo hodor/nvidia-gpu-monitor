@@ -1436,7 +1436,7 @@ void GpuMonitorUI::renderRecordReport() {
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(550, 0));
+    ImGui::SetNextWindowSize(ImVec2(560, 0));
 
     if (ImGui::BeginPopupModal("Recording Report", &m_recording.showReport,
             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
@@ -1447,25 +1447,133 @@ void GpuMonitorUI::renderRecordReport() {
         int seconds = totalSec % 60;
 
         ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), ICON_FA_CIRCLE_DOT " Recording Report");
-        ImGui::TextDisabled("Duration: %d:%02d | Samples: %lu", minutes, seconds, m_recording.totalSamples);
+        ImGui::TextDisabled("Duration: %d:%02d | Samples: %lu | GPUs: %zu",
+            minutes, seconds, m_recording.totalSamples, m_recording.gpuData.size());
+        ImGui::Spacing();
+
+        // === Key Findings Banner ===
+        // Compute overall aggregates
+        double peakVramGB = 0, totalVramGB = 0;
+        double maxTemp = 0, maxPower = 0;
+        double avgGpuUtilSum = 0;
+        int gpuCount = 0;
+        for (const auto& [uuid, data] : m_recording.gpuData) {
+            if (data.vramUsedGB.sampleCount == 0) continue;
+            if (data.vramUsedGB.max > peakVramGB) peakVramGB = data.vramUsedGB.max;
+            totalVramGB += data.vramTotalGB;
+            if (data.temperature.max > maxTemp) maxTemp = data.temperature.max;
+            if (data.powerDraw.max > maxPower) maxPower = data.powerDraw.max;
+            avgGpuUtilSum += data.gpuUtilization.avg();
+            gpuCount++;
+        }
+        double avgGpuUtil = gpuCount > 0 ? avgGpuUtilSum / gpuCount : 0;
+
+        // Key findings in colored boxes
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2 bannerStart = ImGui::GetCursorScreenPos();
+        float bannerWidth = ImGui::GetContentRegionAvail().x;
+        float bannerHeight = 52.0f;
+
+        // Dark background for banner
+        drawList->AddRectFilled(bannerStart,
+            ImVec2(bannerStart.x + bannerWidth, bannerStart.y + bannerHeight),
+            IM_COL32(20, 22, 28, 255), 4.0f);
+        drawList->AddRect(bannerStart,
+            ImVec2(bannerStart.x + bannerWidth, bannerStart.y + bannerHeight),
+            IM_COL32(50, 55, 65, 255), 4.0f);
+
+        float colWidth = bannerWidth / 4.0f;
+        float padX = 10.0f;
+        float labelY = bannerStart.y + 6.0f;
+        float valueY = bannerStart.y + 22.0f;
+
+        // Peak VRAM
+        ImVec4 vramColor = getHealthColor4(getVramHealth(
+            totalVramGB > 0 ? static_cast<float>(peakVramGB / (totalVramGB / gpuCount)) : 0));
+        drawList->AddText(ImVec2(bannerStart.x + padX, labelY),
+            IM_COL32(140, 140, 140, 255), ICON_FA_MEMORY " Peak VRAM");
+        char vramBuf[32];
+        snprintf(vramBuf, sizeof(vramBuf), "%.1f GB", peakVramGB);
+        drawList->AddText(ImVec2(bannerStart.x + padX, valueY),
+            ImGui::ColorConvertFloat4ToU32(vramColor), vramBuf);
+
+        // Max Temp
+        ImVec4 tempColor = getHealthColor4(getTempHealth(static_cast<unsigned int>(maxTemp)));
+        drawList->AddText(ImVec2(bannerStart.x + colWidth + padX, labelY),
+            IM_COL32(140, 140, 140, 255), ICON_FA_TEMPERATURE_HIGH " Max Temp");
+        char tempBuf[16];
+        snprintf(tempBuf, sizeof(tempBuf), "%.0fC", maxTemp);
+        drawList->AddText(ImVec2(bannerStart.x + colWidth + padX, valueY),
+            ImGui::ColorConvertFloat4ToU32(tempColor), tempBuf);
+
+        // Max Power
+        drawList->AddText(ImVec2(bannerStart.x + colWidth * 2 + padX, labelY),
+            IM_COL32(140, 140, 140, 255), ICON_FA_BOLT " Max Power");
+        char powerBuf[16];
+        snprintf(powerBuf, sizeof(powerBuf), "%.0f W", maxPower);
+        drawList->AddText(ImVec2(bannerStart.x + colWidth * 2 + padX, valueY),
+            IM_COL32(240, 190, 50, 255), powerBuf);
+
+        // Avg GPU Util
+        ImVec4 utilColor = getHealthColor4(getVramHealth(static_cast<float>(avgGpuUtil / 100.0)));
+        drawList->AddText(ImVec2(bannerStart.x + colWidth * 3 + padX, labelY),
+            IM_COL32(140, 140, 140, 255), ICON_FA_GAUGE " Avg GPU");
+        char utilBuf[16];
+        snprintf(utilBuf, sizeof(utilBuf), "%.0f%%", avgGpuUtil);
+        drawList->AddText(ImVec2(bannerStart.x + colWidth * 3 + padX, valueY),
+            ImGui::ColorConvertFloat4ToU32(utilColor), utilBuf);
+
+        ImGui::SetCursorScreenPos(ImVec2(bannerStart.x, bannerStart.y + bannerHeight + 6.0f));
+
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
 
-        // Per-GPU tables
-        for (const auto& [uuid, data] : m_recording.gpuData) {
-            if (data.vramUsedGB.sampleCount == 0) continue;
+        // === Color helper lambdas (shared by overall + per-GPU) ===
+        // These need maxVramPerGpu and maxPowerLimit for the overall table,
+        // so we define a table renderer that takes reference values as params.
 
-            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "GPU %u: %s",
-                data.cudaIndex, data.displayName.c_str());
-            if (data.displayName != data.gpuName) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(%s)", data.gpuName.c_str());
-            }
-            ImGui::Spacing();
+        auto renderMetricTable = [&](const char* tableId,
+                const GpuRecordedData& data, float refVramTotal,
+                unsigned int refPowerLimit, unsigned int refGpuClockMax, unsigned int refMemClockMax) {
 
-            std::string tableId = "##rec_" + uuid;
-            if (ImGui::BeginTable(tableId.c_str(), 4,
+            auto colorFor = [&](const char* metric, double val) -> ImVec4 {
+                if (strcmp(metric, "vram") == 0) {
+                    float frac = refVramTotal > 0 ? static_cast<float>(val / refVramTotal) : 0.0f;
+                    return getHealthColor4(getVramHealth(frac));
+                } else if (strcmp(metric, "util") == 0) {
+                    return getHealthColor4(getVramHealth(static_cast<float>(val / 100.0)));
+                } else if (strcmp(metric, "temp") == 0) {
+                    return getHealthColor4(getTempHealth(static_cast<unsigned int>(val)));
+                } else if (strcmp(metric, "fan") == 0) {
+                    return getHealthColor4(getFanHealth(static_cast<unsigned int>(val)));
+                } else if (strcmp(metric, "power") == 0) {
+                    float frac = refPowerLimit > 0 ? static_cast<float>(val / refPowerLimit) : 0.0f;
+                    return getHealthColor4(getMetricHealth(frac));
+                } else if (strcmp(metric, "gpuclk") == 0) {
+                    float frac = refGpuClockMax > 0 ? static_cast<float>(val / refGpuClockMax) : 0.0f;
+                    return getHealthColor4(getMetricHealth(frac));
+                } else if (strcmp(metric, "memclk") == 0) {
+                    float frac = refMemClockMax > 0 ? static_cast<float>(val / refMemClockMax) : 0.0f;
+                    return getHealthColor4(getMetricHealth(frac));
+                }
+                return ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
+            };
+
+            auto renderRow = [&](const char* label, const RecordedMetricStats& s,
+                                const char* fmt, const char* metricKey) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(label);
+                ImGui::TableNextColumn();
+                ImGui::TextColored(colorFor(metricKey, s.min), fmt, s.min);
+                ImGui::TableNextColumn();
+                ImGui::TextColored(colorFor(metricKey, s.avg()), fmt, s.avg());
+                ImGui::TableNextColumn();
+                ImGui::TextColored(colorFor(metricKey, s.max), fmt, s.max);
+            };
+
+            if (ImGui::BeginTable(tableId, 4,
                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
 
                 ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_None, 3.0f);
@@ -1474,64 +1582,81 @@ void GpuMonitorUI::renderRecordReport() {
                 ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_None, 1.5f);
                 ImGui::TableHeadersRow();
 
-                // Helper to render a metric row with health-colored avg
-                struct MetricRow {
-                    const char* label;
-                    const RecordedMetricStats* stats;
-                    const char* fmt;
-                    ImVec4 avgColor;
-                };
-
-                // Build rows with health colors for avg
-                auto colorForVram = [&](double val) {
-                    float frac = data.vramTotalGB > 0 ? static_cast<float>(val / data.vramTotalGB) : 0.0f;
-                    return getHealthColor4(getVramHealth(frac));
-                };
-                auto colorForUtil = [&](double val) {
-                    return getHealthColor4(getVramHealth(static_cast<float>(val / 100.0)));
-                };
-                auto colorForTemp = [&](double val) {
-                    return getHealthColor4(getTempHealth(static_cast<unsigned int>(val)));
-                };
-                auto colorForFan = [&](double val) {
-                    return getHealthColor4(getFanHealth(static_cast<unsigned int>(val)));
-                };
-                auto colorForPower = [&](double val) {
-                    float frac = data.powerLimit > 0 ? static_cast<float>(val / data.powerLimit) : 0.0f;
-                    return getHealthColor4(getMetricHealth(frac));
-                };
-                auto colorForClock = [&](double val, unsigned int maxClk) {
-                    float frac = maxClk > 0 ? static_cast<float>(val / maxClk) : 0.0f;
-                    return getHealthColor4(getMetricHealth(frac));
-                };
-
-                auto renderRow = [](const char* label, const RecordedMetricStats& s,
-                                    const char* fmt, ImVec4 avgColor) {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(label);
-                    ImGui::TableNextColumn();
-                    ImGui::Text(fmt, s.min);
-                    ImGui::TableNextColumn();
-                    ImGui::TextColored(avgColor, fmt, s.avg());
-                    ImGui::TableNextColumn();
-                    ImGui::Text(fmt, s.max);
-                };
-
-                renderRow("VRAM (GB)", data.vramUsedGB, "%.1f", colorForVram(data.vramUsedGB.avg()));
-                renderRow("GPU Util (%)", data.gpuUtilization, "%.0f", colorForUtil(data.gpuUtilization.avg()));
-                renderRow("Mem Util (%)", data.memUtilization, "%.0f", colorForUtil(data.memUtilization.avg()));
-                renderRow("Temperature (C)", data.temperature, "%.0f", colorForTemp(data.temperature.avg()));
-                renderRow("Fan Speed (%)", data.fanSpeed, "%.0f", colorForFan(data.fanSpeed.avg()));
-                renderRow("Power (W)", data.powerDraw, "%.0f", colorForPower(data.powerDraw.avg()));
-                renderRow("GPU Clock (MHz)", data.gpuClock, "%.0f",
-                    colorForClock(data.gpuClock.avg(), data.gpuClockMax));
-                renderRow("Mem Clock (MHz)", data.memClock, "%.0f",
-                    colorForClock(data.memClock.avg(), data.memClockMax));
+                renderRow("VRAM (GB)", data.vramUsedGB, "%.1f", "vram");
+                renderRow("GPU Util (%)", data.gpuUtilization, "%.0f", "util");
+                renderRow("Mem Util (%)", data.memUtilization, "%.0f", "util");
+                renderRow("Temperature (C)", data.temperature, "%.0f", "temp");
+                renderRow("Fan Speed (%)", data.fanSpeed, "%.0f", "fan");
+                renderRow("Power (W)", data.powerDraw, "%.0f", "power");
+                renderRow("GPU Clock (MHz)", data.gpuClock, "%.0f", "gpuclk");
+                renderRow("Mem Clock (MHz)", data.memClock, "%.0f", "memclk");
 
                 ImGui::EndTable();
             }
+        };
+
+        // === Overall Summary (aggregate across all GPUs) ===
+        if (gpuCount > 1) {
+            ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f),
+                ICON_FA_LAYER_GROUP " Overall (%d GPUs)", gpuCount);
             ImGui::Spacing();
+
+            // Build aggregate stats
+            GpuRecordedData overall;
+            float maxVramTotal = 0;
+            unsigned int maxPowerLim = 0, maxGpuClk = 0, maxMemClk = 0;
+            for (const auto& [uuid, data] : m_recording.gpuData) {
+                if (data.vramUsedGB.sampleCount == 0) continue;
+                // For overall: take min of mins, max of maxes, weighted avg
+                auto mergeStats = [](RecordedMetricStats& dst, const RecordedMetricStats& src) {
+                    if (src.min < dst.min) dst.min = src.min;
+                    if (src.max > dst.max) dst.max = src.max;
+                    dst.sum += src.sum;
+                    dst.sampleCount += src.sampleCount;
+                };
+                mergeStats(overall.vramUsedGB, data.vramUsedGB);
+                mergeStats(overall.gpuUtilization, data.gpuUtilization);
+                mergeStats(overall.memUtilization, data.memUtilization);
+                mergeStats(overall.temperature, data.temperature);
+                mergeStats(overall.fanSpeed, data.fanSpeed);
+                mergeStats(overall.powerDraw, data.powerDraw);
+                mergeStats(overall.gpuClock, data.gpuClock);
+                mergeStats(overall.memClock, data.memClock);
+                if (data.vramTotalGB > maxVramTotal) maxVramTotal = data.vramTotalGB;
+                if (data.powerLimit > maxPowerLim) maxPowerLim = data.powerLimit;
+                if (data.gpuClockMax > maxGpuClk) maxGpuClk = data.gpuClockMax;
+                if (data.memClockMax > maxMemClk) maxMemClk = data.memClockMax;
+            }
+
+            renderMetricTable("##rec_overall", overall, maxVramTotal, maxPowerLim, maxGpuClk, maxMemClk);
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
+
+        // === Per-GPU tables (collapsible) ===
+        for (const auto& [uuid, data] : m_recording.gpuData) {
+            if (data.vramUsedGB.sampleCount == 0) continue;
+
+            char header[256];
+            if (data.displayName != data.gpuName) {
+                snprintf(header, sizeof(header), "GPU %u: %s (%s)",
+                    data.cudaIndex, data.displayName.c_str(), data.gpuName.c_str());
+            } else {
+                snprintf(header, sizeof(header), "GPU %u: %s",
+                    data.cudaIndex, data.displayName.c_str());
+            }
+
+            // Default open if single GPU, collapsed if multiple
+            if (gpuCount <= 1) {
+                ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+            }
+            if (ImGui::CollapsingHeader(header)) {
+                std::string tableId = "##rec_" + uuid;
+                renderMetricTable(tableId.c_str(), data,
+                    data.vramTotalGB, data.powerLimit, data.gpuClockMax, data.memClockMax);
+                ImGui::Spacing();
+            }
         }
 
         ImGui::Separator();
@@ -1561,17 +1686,10 @@ std::string GpuMonitorUI::formatRecordReportText() const {
 
     out << "GPU Recording Report\n";
     out << "Duration: " << minutes << ":" << (seconds < 10 ? "0" : "") << seconds
-        << " | Samples: " << m_recording.totalSamples << "\n";
+        << " | Samples: " << m_recording.totalSamples
+        << " | GPUs: " << m_recording.gpuData.size() << "\n";
 
-    for (const auto& [uuid, data] : m_recording.gpuData) {
-        if (data.vramUsedGB.sampleCount == 0) continue;
-
-        out << "\n=== GPU " << data.cudaIndex << ": " << data.gpuName;
-        if (data.displayName != data.gpuName) {
-            out << " (" << data.displayName << ")";
-        }
-        out << " ===\n";
-
+    auto writeTable = [&](const GpuRecordedData& data) {
         char line[128];
         out << "Metric           |     Min |     Avg |     Max\n";
         out << "-----------------+---------+---------+--------\n";
@@ -1600,6 +1718,47 @@ std::string GpuMonitorUI::formatRecordReportText() const {
         snprintf(line, sizeof(line), "Mem Clock (MHz)  | %7.0f | %7.0f | %7.0f\n",
             data.memClock.min, data.memClock.avg(), data.memClock.max);
         out << line;
+    };
+
+    // Overall summary (if multiple GPUs)
+    int gpuCount = 0;
+    for (const auto& [uuid, data] : m_recording.gpuData) {
+        if (data.vramUsedGB.sampleCount > 0) gpuCount++;
+    }
+
+    if (gpuCount > 1) {
+        GpuRecordedData overall;
+        for (const auto& [uuid, data] : m_recording.gpuData) {
+            if (data.vramUsedGB.sampleCount == 0) continue;
+            auto mergeStats = [](RecordedMetricStats& dst, const RecordedMetricStats& src) {
+                if (src.min < dst.min) dst.min = src.min;
+                if (src.max > dst.max) dst.max = src.max;
+                dst.sum += src.sum;
+                dst.sampleCount += src.sampleCount;
+            };
+            mergeStats(overall.vramUsedGB, data.vramUsedGB);
+            mergeStats(overall.gpuUtilization, data.gpuUtilization);
+            mergeStats(overall.memUtilization, data.memUtilization);
+            mergeStats(overall.temperature, data.temperature);
+            mergeStats(overall.fanSpeed, data.fanSpeed);
+            mergeStats(overall.powerDraw, data.powerDraw);
+            mergeStats(overall.gpuClock, data.gpuClock);
+            mergeStats(overall.memClock, data.memClock);
+        }
+        out << "\n=== OVERALL (" << gpuCount << " GPUs) ===\n";
+        writeTable(overall);
+    }
+
+    // Per-GPU
+    for (const auto& [uuid, data] : m_recording.gpuData) {
+        if (data.vramUsedGB.sampleCount == 0) continue;
+
+        out << "\n=== GPU " << data.cudaIndex << ": " << data.gpuName;
+        if (data.displayName != data.gpuName) {
+            out << " (" << data.displayName << ")";
+        }
+        out << " ===\n";
+        writeTable(data);
     }
 
     return out.str();
