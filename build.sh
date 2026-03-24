@@ -24,8 +24,12 @@ check_dependency() {
 check_dependency cmake
 check_dependency make
 
-# Prefer GCC for better C++20 support (jthread, stop_token)
-if check_dependency gcc && check_dependency g++; then
+# Prefer GCC 13+ for C++20 support (jthread, stop_token)
+if check_dependency gcc-13 && check_dependency g++-13; then
+    export CC=gcc-13
+    export CXX=g++-13
+    echo -e "Compiler: ${YELLOW}GCC 13${NC}"
+elif check_dependency gcc && check_dependency g++; then
     export CC=gcc
     export CXX=g++
     echo -e "Compiler: ${YELLOW}GCC${NC}"
