@@ -1223,6 +1223,8 @@ void GpuMonitorUI::render(const std::vector<GpuStats>& gpuStats, const SystemInf
     ImGui::Begin("GPU Monitor", nullptr, windowFlags);
 
     ImGui::Text(ICON_FA_MICROCHIP " GPU Monitor");
+    ImGui::SameLine();
+    renderRecordButton(gpuStats);
     ImGui::SameLine(ImGui::GetWindowWidth() - 100);
     ImGui::TextDisabled("%.0f FPS", io.Framerate);
     ImGui::Separator();
@@ -1293,6 +1295,9 @@ void GpuMonitorUI::render(const std::vector<GpuStats>& gpuStats, const SystemInf
     // Confirmation dialog
     renderConfirmDialog();
 
+    // Recording report modal
+    renderRecordReport();
+
     // Modal overlay (drawn on foreground, so after all other content)
     renderModalOverlay();
 
@@ -1347,6 +1352,257 @@ void GpuMonitorUI::renderConfirmDialog() {
 
         ImGui::EndPopup();
     }
+}
+
+void GpuMonitorUI::renderRecordButton(const std::vector<GpuStats>& gpuStats) {
+    ImGuiIO& io = ImGui::GetIO();
+
+    if (!m_recording.isRecording) {
+        // Red record button
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.8f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::SmallButton(ICON_FA_CIRCLE " Rec")) {
+            m_recording.reset();
+            m_recording.isRecording = true;
+            m_recordPulseTimer = 0.0f;
+            // Initialize per-GPU data
+            for (const auto& stats : gpuStats) {
+                auto& data = m_recording.gpuData[stats.uuid];
+                data.gpuName = stats.name;
+                data.displayName = getGpuDisplayName(stats);
+                data.vramTotalGB = static_cast<float>(stats.vramTotal) / (1024.0f * 1024.0f * 1024.0f);
+                data.powerLimit = stats.powerLimit;
+                data.gpuClockMax = stats.gpuClockMax;
+                data.memClockMax = stats.memClockMax;
+                data.cudaIndex = stats.cudaIndex;
+            }
+        }
+        ImGui::PopStyleColor(3);
+    } else {
+        // Recording active — accumulate data
+        float deltaTime = io.DeltaTime;
+        m_recording.elapsedTime += deltaTime;
+        m_recordPulseTimer += deltaTime;
+
+        for (const auto& stats : gpuStats) {
+            auto it = m_recording.gpuData.find(stats.uuid);
+            if (it == m_recording.gpuData.end()) continue;
+            auto& data = it->second;
+            data.timeSinceLastSample += deltaTime;
+            if (data.timeSinceLastSample >= 0.95f) {
+                float vramGB = static_cast<float>(stats.vramUsed) / (1024.0f * 1024.0f * 1024.0f);
+                data.vramUsedGB.addSample(vramGB);
+                data.gpuUtilization.addSample(stats.gpuUtilization);
+                data.memUtilization.addSample(stats.memUtilization);
+                data.temperature.addSample(stats.temperature);
+                data.fanSpeed.addSample(stats.fanSpeed);
+                data.powerDraw.addSample(stats.powerDraw);
+                data.gpuClock.addSample(stats.gpuClock);
+                data.memClock.addSample(stats.memClock);
+                data.timeSinceLastSample = 0.0f;
+                m_recording.totalSamples++;
+            }
+        }
+
+        // Pulsing red dot
+        float alpha = 0.5f + 0.5f * sinf(m_recordPulseTimer * 4.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, alpha), ICON_FA_CIRCLE);
+        ImGui::SameLine();
+
+        // Elapsed time
+        int totalSec = static_cast<int>(m_recording.elapsedTime);
+        int minutes = totalSec / 60;
+        int seconds = totalSec % 60;
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "REC %d:%02d", minutes, seconds);
+        ImGui::SameLine();
+
+        // Stop button
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.15f, 0.15f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.2f, 0.2f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.7f, 0.25f, 0.25f, 1.0f));
+        if (ImGui::SmallButton(ICON_FA_STOP " Stop")) {
+            m_recording.isRecording = false;
+            m_recording.showReport = true;
+        }
+        ImGui::PopStyleColor(3);
+    }
+}
+
+void GpuMonitorUI::renderRecordReport() {
+    if (!m_recording.showReport) return;
+
+    ImGui::OpenPopup("Recording Report");
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(550, 0));
+
+    if (ImGui::BeginPopupModal("Recording Report", &m_recording.showReport,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+
+        // Header
+        int totalSec = static_cast<int>(m_recording.elapsedTime);
+        int minutes = totalSec / 60;
+        int seconds = totalSec % 60;
+
+        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), ICON_FA_CIRCLE_DOT " Recording Report");
+        ImGui::TextDisabled("Duration: %d:%02d | Samples: %lu", minutes, seconds, m_recording.totalSamples);
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Per-GPU tables
+        for (const auto& [uuid, data] : m_recording.gpuData) {
+            if (data.vramUsedGB.sampleCount == 0) continue;
+
+            ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.9f, 1.0f), "GPU %u: %s",
+                data.cudaIndex, data.displayName.c_str());
+            if (data.displayName != data.gpuName) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", data.gpuName.c_str());
+            }
+            ImGui::Spacing();
+
+            std::string tableId = "##rec_" + uuid;
+            if (ImGui::BeginTable(tableId.c_str(), 4,
+                    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+
+                ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_None, 3.0f);
+                ImGui::TableSetupColumn("Min", ImGuiTableColumnFlags_None, 1.5f);
+                ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_None, 1.5f);
+                ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_None, 1.5f);
+                ImGui::TableHeadersRow();
+
+                // Helper to render a metric row with health-colored avg
+                struct MetricRow {
+                    const char* label;
+                    const RecordedMetricStats* stats;
+                    const char* fmt;
+                    ImVec4 avgColor;
+                };
+
+                // Build rows with health colors for avg
+                auto colorForVram = [&](double val) {
+                    float frac = data.vramTotalGB > 0 ? static_cast<float>(val / data.vramTotalGB) : 0.0f;
+                    return getHealthColor4(getVramHealth(frac));
+                };
+                auto colorForUtil = [&](double val) {
+                    return getHealthColor4(getVramHealth(static_cast<float>(val / 100.0)));
+                };
+                auto colorForTemp = [&](double val) {
+                    return getHealthColor4(getTempHealth(static_cast<unsigned int>(val)));
+                };
+                auto colorForFan = [&](double val) {
+                    return getHealthColor4(getFanHealth(static_cast<unsigned int>(val)));
+                };
+                auto colorForPower = [&](double val) {
+                    float frac = data.powerLimit > 0 ? static_cast<float>(val / data.powerLimit) : 0.0f;
+                    return getHealthColor4(getMetricHealth(frac));
+                };
+                auto colorForClock = [&](double val, unsigned int maxClk) {
+                    float frac = maxClk > 0 ? static_cast<float>(val / maxClk) : 0.0f;
+                    return getHealthColor4(getMetricHealth(frac));
+                };
+
+                auto renderRow = [](const char* label, const RecordedMetricStats& s,
+                                    const char* fmt, ImVec4 avgColor) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(label);
+                    ImGui::TableNextColumn();
+                    ImGui::Text(fmt, s.min);
+                    ImGui::TableNextColumn();
+                    ImGui::TextColored(avgColor, fmt, s.avg());
+                    ImGui::TableNextColumn();
+                    ImGui::Text(fmt, s.max);
+                };
+
+                renderRow("VRAM (GB)", data.vramUsedGB, "%.1f", colorForVram(data.vramUsedGB.avg()));
+                renderRow("GPU Util (%)", data.gpuUtilization, "%.0f", colorForUtil(data.gpuUtilization.avg()));
+                renderRow("Mem Util (%)", data.memUtilization, "%.0f", colorForUtil(data.memUtilization.avg()));
+                renderRow("Temperature (C)", data.temperature, "%.0f", colorForTemp(data.temperature.avg()));
+                renderRow("Fan Speed (%)", data.fanSpeed, "%.0f", colorForFan(data.fanSpeed.avg()));
+                renderRow("Power (W)", data.powerDraw, "%.0f", colorForPower(data.powerDraw.avg()));
+                renderRow("GPU Clock (MHz)", data.gpuClock, "%.0f",
+                    colorForClock(data.gpuClock.avg(), data.gpuClockMax));
+                renderRow("Mem Clock (MHz)", data.memClock, "%.0f",
+                    colorForClock(data.memClock.avg(), data.memClockMax));
+
+                ImGui::EndTable();
+            }
+            ImGui::Spacing();
+        }
+
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Buttons
+        if (ImGui::Button(ICON_FA_COPY " Copy as Text", ImVec2(140, 0))) {
+            copyToClipboard(formatRecordReportText());
+            showCopiedToast("Recording report");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_FA_XMARK " Close", ImVec2(90, 0))) {
+            m_recording.showReport = false;
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+std::string GpuMonitorUI::formatRecordReportText() const {
+    std::ostringstream out;
+
+    int totalSec = static_cast<int>(m_recording.elapsedTime);
+    int minutes = totalSec / 60;
+    int seconds = totalSec % 60;
+
+    out << "GPU Recording Report\n";
+    out << "Duration: " << minutes << ":" << (seconds < 10 ? "0" : "") << seconds
+        << " | Samples: " << m_recording.totalSamples << "\n";
+
+    for (const auto& [uuid, data] : m_recording.gpuData) {
+        if (data.vramUsedGB.sampleCount == 0) continue;
+
+        out << "\n=== GPU " << data.cudaIndex << ": " << data.gpuName;
+        if (data.displayName != data.gpuName) {
+            out << " (" << data.displayName << ")";
+        }
+        out << " ===\n";
+
+        char line[128];
+        out << "Metric           |     Min |     Avg |     Max\n";
+        out << "-----------------+---------+---------+--------\n";
+
+        snprintf(line, sizeof(line), "VRAM (GB)        | %7.1f | %7.1f | %7.1f\n",
+            data.vramUsedGB.min, data.vramUsedGB.avg(), data.vramUsedGB.max);
+        out << line;
+        snprintf(line, sizeof(line), "GPU Util (%%)     | %7.0f | %7.0f | %7.0f\n",
+            data.gpuUtilization.min, data.gpuUtilization.avg(), data.gpuUtilization.max);
+        out << line;
+        snprintf(line, sizeof(line), "Mem Util (%%)     | %7.0f | %7.0f | %7.0f\n",
+            data.memUtilization.min, data.memUtilization.avg(), data.memUtilization.max);
+        out << line;
+        snprintf(line, sizeof(line), "Temperature (C)  | %7.0f | %7.0f | %7.0f\n",
+            data.temperature.min, data.temperature.avg(), data.temperature.max);
+        out << line;
+        snprintf(line, sizeof(line), "Fan Speed (%%)    | %7.0f | %7.0f | %7.0f\n",
+            data.fanSpeed.min, data.fanSpeed.avg(), data.fanSpeed.max);
+        out << line;
+        snprintf(line, sizeof(line), "Power (W)        | %7.0f | %7.0f | %7.0f\n",
+            data.powerDraw.min, data.powerDraw.avg(), data.powerDraw.max);
+        out << line;
+        snprintf(line, sizeof(line), "GPU Clock (MHz)  | %7.0f | %7.0f | %7.0f\n",
+            data.gpuClock.min, data.gpuClock.avg(), data.gpuClock.max);
+        out << line;
+        snprintf(line, sizeof(line), "Mem Clock (MHz)  | %7.0f | %7.0f | %7.0f\n",
+            data.memClock.min, data.memClock.avg(), data.memClock.max);
+        out << line;
+    }
+
+    return out.str();
 }
 
 void GpuMonitorUI::renderBadge(const char* text, bool isTCC) {

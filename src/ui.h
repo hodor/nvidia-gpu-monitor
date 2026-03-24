@@ -7,6 +7,8 @@
 #include <map>
 #include <functional>
 #include <algorithm>
+#include <limits>
+#include <sstream>
 
 // Confirmation dialog state
 struct ConfirmDialog {
@@ -141,6 +143,67 @@ struct GpuMetricHistory {
     }
 };
 
+// Running min/max/avg accumulator for a single metric
+struct RecordedMetricStats {
+    double min = std::numeric_limits<double>::max();
+    double max = std::numeric_limits<double>::lowest();
+    double sum = 0.0;
+    unsigned long sampleCount = 0;
+
+    void addSample(double value) {
+        if (value < min) min = value;
+        if (value > max) max = value;
+        sum += value;
+        sampleCount++;
+    }
+
+    double avg() const {
+        return sampleCount > 0 ? sum / sampleCount : 0.0;
+    }
+};
+
+// Per-GPU recorded data
+struct GpuRecordedData {
+    std::string gpuName;
+    std::string displayName;
+
+    RecordedMetricStats vramUsedGB;
+    RecordedMetricStats gpuUtilization;
+    RecordedMetricStats memUtilization;
+    RecordedMetricStats temperature;
+    RecordedMetricStats fanSpeed;
+    RecordedMetricStats powerDraw;
+    RecordedMetricStats gpuClock;
+    RecordedMetricStats memClock;
+
+    // Static reference values
+    float vramTotalGB = 0.0f;
+    unsigned int powerLimit = 0;
+    unsigned int gpuClockMax = 0;
+    unsigned int memClockMax = 0;
+    unsigned int cudaIndex = 0;
+
+    // Sample pacing
+    float timeSinceLastSample = 0.0f;
+};
+
+// Global recording state
+struct RecordingState {
+    bool isRecording = false;
+    bool showReport = false;
+    float elapsedTime = 0.0f;
+    unsigned long totalSamples = 0;
+    std::map<std::string, GpuRecordedData> gpuData;
+
+    void reset() {
+        isRecording = false;
+        showReport = false;
+        elapsedTime = 0.0f;
+        totalSamples = 0;
+        gpuData.clear();
+    }
+};
+
 // Sparkline zoom drag state
 struct SparklineZoomState {
     bool isDragging = false;
@@ -173,6 +236,11 @@ private:
     void renderProcessesSection(const GpuStats& stats);
     void renderCommandsSection(const GpuStats& stats, const std::vector<GpuStats>& allStats);
     void renderConfirmDialog();
+
+    // Recording
+    void renderRecordButton(const std::vector<GpuStats>& gpuStats);
+    void renderRecordReport();
+    std::string formatRecordReportText() const;
 
     // Drag-drop functions
     void renderDragHandle(const GpuStats& stats, const std::string& displayName, int index);
@@ -221,6 +289,10 @@ private:
     // Sparkline zoom state
     SparklineZoomState m_zoomState;
 
+    // Recording state
+    RecordingState m_recording;
+    float m_recordPulseTimer = 0.0f;
+
     // Render compact metrics section with sparklines (grid layout)
     void renderCompactMetrics(const GpuStats& stats);
 
@@ -235,7 +307,7 @@ private:
 
     // Check if UI is in a modal state (should block other interactions)
     bool isModalActive() const {
-        return m_dragState.isDragging || m_zoomState.isDragging;
+        return m_dragState.isDragging || m_zoomState.isDragging || m_recording.showReport;
     }
 
     // Render darkening overlay for modal states
